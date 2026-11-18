@@ -73,6 +73,7 @@
     <Compile Include="ExcelCellValueComparer.cs" />
     <Compile Include="ExcelColumn.cs" />
     <Compile Include="ExcelColumnStatus.cs" />
+    <Compile Include="ExcelDiffApplier.cs" />
     <Compile Include="ExcelReader.cs" />
     <Compile Include="ExcelRow.cs" />
     <Compile Include="ExcelRowDiff.cs" />
@@ -83,6 +84,7 @@
     <Compile Include="ExcelSheetReadConfig.cs" />
     <Compile Include="ExcelUtility.cs" />
     <Compile Include="ExcelWorkbook.cs" />
+    <Compile Include="ExcelWriteTarget.cs" />
     <Compile Include="ExcelWorkbookType.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="TsvReader.cs" />

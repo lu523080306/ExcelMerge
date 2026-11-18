@@ -243,3 +243,16 @@ ModelManifest.xml
 
 # FAKE - F# Make
 .fake/
+# --- Local dev additions (apply/sync feature work) ---
+# Build tooling artifacts not worth versioning
+.nuget/nuget.exe
+.idea/
+
+# Regression harness: keep only the harness source + sample CSVs;
+# ignore generated outputs, logless artifacts and personal test files
+.smoketest/*
+!.smoketest/ApplyVerify.cs
+!.smoketest/a.csv
+!.smoketest/b.csv
+!.smoketest/c.csv
+!.smoketest/wide.csv

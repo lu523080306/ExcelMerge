@@ -7,6 +7,9 @@ namespace ExcelMerge
     {
         public SortedDictionary<int, ExcelRowDiff> Rows { get; private set; }
 
+        /// <summary>对齐列 → 列状态（None/Inserted/Deleted），V2 结构级应用需要。</summary>
+        public Dictionary<int, ExcelColumnStatus> ColumnStatusMap { get; set; }
+
         public ExcelSheetDiff()
         {
             Rows = new SortedDictionary<int, ExcelRowDiff>();

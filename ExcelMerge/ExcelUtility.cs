@@ -51,6 +51,47 @@ namespace ExcelMerge
             return GetCellValue(cell).ToString();
         }
 
+        /// <summary>释放 NPOI 工作簿底层的文件句柄（读后再写同一文件前必须调用）。</summary>
+        public static void ReleaseWorkbook(IWorkbook workbook)
+        {
+            var xssf = workbook as NPOI.XSSF.UserModel.XSSFWorkbook;
+            if (xssf == null)
+                return;
+
+            try { xssf.Package.Close(); } catch { }
+        }
+
+        /// <summary>类型感知写值：目标格子原为数字/布尔则尽量保持类型，公式不覆盖，其余按文本写入。</summary>
+        public static void SetValue(ICell cell, string value)
+        {
+            if (cell == null)
+                return;
+
+            double d;
+            bool b;
+
+            switch (cell.CellType)
+            {
+                case CellType.Numeric:
+                    if (double.TryParse(value, out d))
+                        cell.SetCellValue(d);
+                    else
+                        cell.SetCellValue(value);
+                    break;
+                case CellType.Boolean:
+                    if (bool.TryParse(value, out b))
+                        cell.SetCellValue(b);
+                    else
+                        cell.SetCellValue(value);
+                    break;
+                case CellType.Formula:
+                    break;
+                default:
+                    cell.SetCellValue(value);
+                    break;
+            }
+        }
+
         public static void CreateWorkbook(string path, ExcelWorkbookType workbookType)
         {
             if (!ValidateExtension(path, workbookType))

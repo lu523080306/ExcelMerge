@@ -70,6 +70,27 @@ namespace ExcelMerge.GUI.Models
 
         public override string GetColumnHeaderText(int column)
         {
+            return GetExcelColumnLetter(column);
+        }
+
+        /// <summary>Excel 原生列字母：0→A, 1→B, ..., 25→Z, 26→AA ...</summary>
+        public static string GetExcelColumnLetter(int column)
+        {
+            var index = column + 1;
+            var result = string.Empty;
+            while (index > 0)
+            {
+                var rem = (index - 1) % 26;
+                result = (char)('A' + rem) + result;
+                index = (index - 1) / 26;
+            }
+
+            return result;
+        }
+
+        /// <summary>不含列号的原始表头文本（用于按表头名匹配等）。</summary>
+        public string GetColumnHeaderRawText(int column)
+        {
             ExcelCellDiff cellDiff;
             if (TryGetCellDiff(ColumnHeaderIndex, column, out cellDiff))
                 return GetCellText(cellDiff);
@@ -252,6 +273,31 @@ namespace ExcelMerge.GUI.Models
         public override IFastGridCell GetCell(IFastGridView view, int row, int column)
         {
             return GetCell(view, row, column, false);
+        }
+
+        /// <summary>把可视格子地址映射到底层 diff 格子（选中格应用用）。映射失败返回 null。</summary>
+        public ExcelCellDiff GetCellDiffForVisualAddress(FastGridCellAddress visualCellAddress)
+        {
+            if (visualCellAddress.IsEmpty)
+                return null;
+
+            var real = GetRealCellAddress(visualCellAddress);
+            ExcelRowDiff rowDiff;
+            if (real.IsEmpty || !SheetDiff.Rows.TryGetValue(real.Row.Value, out rowDiff))
+                return null;
+
+            ExcelCellDiff cellDiff;
+            if (rowDiff.Cells.TryGetValue(real.Column.Value, out cellDiff))
+                return cellDiff;
+
+            return null;
+        }
+
+        /// <summary>把可视行号映射到 diff 行索引（整行应用用）。无对应行返回 -1。</summary>
+        public int GetRowDiffIndexForVisualRow(int visualRow)
+        {
+            var real = rowIndexMap.ContainsKey(visualRow) ? rowIndexMap[visualRow] : visualRow;
+            return SheetDiff.Rows.ContainsKey(real) ? real : -1;
         }
 
         private FastGridCellAddress GetVisualCellAddress(FastGridCellAddress realCellAddress)
@@ -486,7 +532,7 @@ namespace ExcelMerge.GUI.Models
         {
             for (int i = 0; i < columnCount; i++)
             {
-                if (columnHeaderName == GetColumnHeaderText(i))
+                if (columnHeaderName == GetColumnHeaderRawText(i) || columnHeaderName == GetColumnHeaderText(i))
                 {
                     SetRowHeader(i);
                     return;

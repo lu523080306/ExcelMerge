@@ -1,6 +1,7 @@
 ﻿using System.Collections.Generic;
 using System.IO;
 using NPOI.SS.UserModel;
+using NPOI.XSSF.UserModel;
 
 namespace ExcelMerge
 {
@@ -23,10 +24,18 @@ namespace ExcelMerge
 
             var srcWb = WorkbookFactory.Create(path);
             var wb = new ExcelWorkbook();
-            for (int i = 0; i < srcWb.NumberOfSheets; i++)
+            try
             {
-                var srcSheet = srcWb.GetSheetAt(i);
-                wb.Sheets.Add(srcSheet.SheetName, ExcelSheet.Create(srcSheet, config));
+                for (int i = 0; i < srcWb.NumberOfSheets; i++)
+                {
+                    var srcSheet = srcWb.GetSheetAt(i);
+                    wb.Sheets.Add(srcSheet.SheetName, ExcelSheet.Create(srcSheet, config));
+                }
+            }
+            finally
+            {
+                // 释放 NPOI 底层文件句柄，否则对同一文件"读后再写"(apply)会报文件被占用
+                ReleaseFileHandle(srcWb);
             }
 
             return wb;
@@ -44,10 +53,30 @@ namespace ExcelMerge
             }
             else
             {
+                var names = new List<string>();
                 var wb = WorkbookFactory.Create(path);
-                for (int i = 0; i < wb.NumberOfSheets; i++)
-                    yield return wb.GetSheetAt(i).SheetName;
+                try
+                {
+                    for (int i = 0; i < wb.NumberOfSheets; i++)
+                        names.Add(wb.GetSheetAt(i).SheetName);
+                }
+                finally
+                {
+                    ReleaseFileHandle(wb);
+                }
+
+                foreach (var name in names)
+                    yield return name;
             }
+        }
+
+        private static void ReleaseFileHandle(IWorkbook wb)
+        {
+            var xssf = wb as XSSFWorkbook;
+            if (xssf == null)
+                return;
+
+            try { xssf.Package.Close(); } catch { }
         }
 
         private static ExcelWorkbook CreateFromCsv(string path, ExcelSheetReadConfig config)

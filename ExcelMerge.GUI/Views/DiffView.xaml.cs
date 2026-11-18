@@ -23,7 +23,10 @@ namespace ExcelMerge.GUI.Views
     public partial class DiffView : UserControl
     {
         private ExcelSheetDiffConfig diffConfig = new ExcelSheetDiffConfig();
+        private ExcelSheetDiff currentSheetDiff;
         private IUnityContainer container;
+        private FastGridControl pendingColumnGrid;
+        private int? pendingColumnIndex;
         private const string srcKey = "src";
         private const string dstKey = "dst";
 
@@ -34,6 +37,9 @@ namespace ExcelMerge.GUI.Views
             InitializeComponent();
             InitializeContainer();
             InitializeEventListeners();
+
+            SrcDataGrid.ColumnHeaderClick += (s, e) => SetPendingColumn(SrcDataGrid, e.Column);
+            DstDataGrid.ColumnHeaderClick += (s, e) => SetPendingColumn(DstDataGrid, e.Column);
 
             App.Instance.OnSettingUpdated += OnApplicationSettingUpdated;
 
@@ -176,6 +182,10 @@ namespace ExcelMerge.GUI.Views
             var grid = copyTargetGrid = sender as FastGridControl;
             if (grid == null)
                 return;
+
+            // 点数据格 = 放弃之前的列头列意图
+            if (pendingColumnGrid == grid && grid.CurrentCell != null && !grid.CurrentCell.IsColumnHeader)
+                pendingColumnIndex = null;
 
             copyTargetGrid = grid;
 
@@ -360,6 +370,413 @@ namespace ExcelMerge.GUI.Views
             ExecuteDiff();
         }
 
+        private void ApplyToDstButton_Click(object sender, RoutedEventArgs e)
+        {
+            ApplyDiff(ExcelDiffDirection.SrcToDst);
+        }
+
+        private void ApplyToSrcButton_Click(object sender, RoutedEventArgs e)
+        {
+            ApplyDiff(ExcelDiffDirection.DstToSrc);
+        }
+
+        private void ApplyDiff(ExcelDiffDirection direction)
+        {
+            if (currentSheetDiff == null)
+            {
+                MessageBox.Show("请先执行一次对比。", "应用改动", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var srcToDst = direction == ExcelDiffDirection.SrcToDst;
+            var targetPath = srcToDst ? DstPathTextBox.Text : SrcPathTextBox.Text;
+            var targetSheet = (srcToDst ? DstSheetCombobox.SelectedItem : SrcSheetCombobox.SelectedItem)?.ToString();
+
+            var applier = new ExcelDiffApplier();
+
+            // ① 整列选中 → 只同步这些列（列优先于行级：拖选整列会顺带触到个别结构行）
+            var colInfo = CollectSelectedColumns(direction);
+
+            // 列头点击＝明确列意图：优先于选择检测（消除"新增多个行"时误判为行级）
+            if (colInfo == null && pendingColumnIndex.HasValue && pendingColumnGrid != null)
+            {
+                colInfo = Tuple.Create(new HashSet<int> { pendingColumnIndex.Value }, true);
+                pendingColumnIndex = null;
+            }
+
+            if (colInfo != null)
+            {
+                var colNames = string.Join("、", colInfo.Item1.OrderBy(c => c).Select(c => DiffGridModel.GetExcelColumnLetter(c) + "列"));
+                var confirmCol = MessageBox.Show(
+                    string.Format("从 {0} 同步列 {1} 到 {2}。\n{3}\n\n目标文件: {4}",
+                        srcToDst ? "左侧" : "右侧", colNames, srcToDst ? "右侧" : "左侧",
+                        DescribeColumnOps(colInfo.Item1, direction), targetPath),
+                    "同步选中列", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+                if (confirmCol != MessageBoxResult.Yes)
+                    return;
+
+                var rc = applier.ApplyColumns(currentSheetDiff, targetPath, targetSheet, direction, colInfo.Item1);
+                MessageBox.Show(rc.Message, "应用结果", MessageBoxButton.OK,
+                    rc.IsSuccess ? MessageBoxImage.Information : MessageBoxImage.Error);
+
+                if (rc.IsSuccess)
+                    ExecuteDiff();
+
+                return;
+            }
+
+            // ② 行级：选中整行 或 选中结构行(新增/删除行) → 只同步这些行
+            var rowInfo = CollectSelectedRowsAndMode(direction);
+            if (rowInfo != null && rowInfo.Item2)
+            {
+                var confirm = MessageBox.Show(
+                    string.Format("从 {0} 同步选中的 {1} 行到 {2}。\n{3}\n\n目标文件: {4}",
+                        srcToDst ? "左侧" : "右侧", rowInfo.Item1.Count, srcToDst ? "右侧" : "左侧",
+                        DescribeRowOperations(rowInfo.Item1, direction), targetPath),
+                    "同步选中行", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+                if (confirm != MessageBoxResult.Yes)
+                    return;
+
+                var r = applier.ApplyRows(currentSheetDiff, targetPath, targetSheet, direction, rowInfo.Item1);
+                MessageBox.Show(r.Message, "应用结果", MessageBoxButton.OK,
+                    r.IsSuccess ? MessageBoxImage.Information : MessageBoxImage.Error);
+
+                if (r.IsSuccess)
+                    ExecuteDiff();
+
+                return;
+            }
+
+            // ③ 格子级：选中部分值差异格 → 只应用这些格
+            var selectedChanges = CollectSelectedCellChanges(direction);
+            if (selectedChanges != null && selectedChanges.Count > 0)
+            {
+                var confirm = MessageBox.Show(
+                    string.Format("从 {0} 应用选中的 {1} 个格子的值到 {2}。\n\n目标文件: {3}",
+                        srcToDst ? "左侧" : "右侧", selectedChanges.Count, srcToDst ? "右侧" : "左侧", targetPath),
+                    "应用选中格", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+                if (confirm != MessageBoxResult.Yes)
+                    return;
+
+                var r = applier.ApplyExplicit(targetPath, targetSheet, selectedChanges);
+                MessageBox.Show(r.Message, "应用结果", MessageBoxButton.OK,
+                    r.IsSuccess ? MessageBoxImage.Information : MessageBoxImage.Error);
+
+                if (r.IsSuccess)
+                    ExecuteDiff();
+
+                return;
+            }
+
+            // 有选中但无法归类 → 提示而不是默默全量同步
+            if (SrcDataGrid.SelectedCells.Any() || DstDataGrid.SelectedCells.Any())
+            {
+                MessageBox.Show(
+                    "当前选择无法识别为要同步的行/列/格子。\n\n操作方法：\n• 同步整列 → 点击该列列头\n• 同步整行 → 选中整行\n• 同步格子 → 选中值差异格\n再点 ← / →。\n\n若确需全量同步，请先取消所有选中。",
+                    "无法识别选择", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            // ③ 无选中：全量同步（含行列结构级）
+            var confirmAll = MessageBox.Show(
+                string.Format("从 {0} 应用全部差异到 {1}：\n{2}\n\n目标文件: {3}\n\n将覆盖目标文件中的对应格子/行列，确定继续？",
+                    srcToDst ? "左侧" : "右侧", srcToDst ? "右侧" : "左侧",
+                    DescribeFullDiff(direction), targetPath),
+                "应用全部差异", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+            if (confirmAll != MessageBoxResult.Yes)
+                return;
+
+            var result = applier.Apply(currentSheetDiff, targetPath, targetSheet, direction);
+
+            MessageBox.Show(result.Message, "应用结果", MessageBoxButton.OK,
+                result.IsSuccess ? MessageBoxImage.Information : MessageBoxImage.Error);
+
+            if (result.IsSuccess)
+                ExecuteDiff();
+        }
+
+        /// <summary>把源侧网格上选中的格子收集为待应用改动（只取 Modified 格）；无选中返回 null。</summary>
+        private List<CellChange> CollectSelectedCellChanges(ExcelDiffDirection direction)
+        {
+            var srcToDst = direction == ExcelDiffDirection.SrcToDst;
+            var sourceGrid = GetActiveSelectionGrid(direction);
+            var model = sourceGrid.Model as DiffGridModel;
+
+            var changes = new List<CellChange>();
+            foreach (var address in sourceGrid.SelectedCells)
+            {
+                var cellDiff = model?.GetCellDiffForVisualAddress(address);
+                if (cellDiff == null)
+                    continue;
+
+                // 只有值差异格(Modified)在目标侧有真实落点；结构级(Added/Removed)不适用格子应用
+                if (cellDiff.Status != ExcelCellStatus.Modified)
+                    continue;
+
+                changes.Add(srcToDst
+                    ? new CellChange(
+                          cellDiff.DstCell.OriginalRowIndex,
+                          cellDiff.DstCell.OriginalColumnIndex,
+                          cellDiff.SrcCell.Value)
+                    : new CellChange(
+                          cellDiff.SrcCell.OriginalRowIndex,
+                          cellDiff.SrcCell.OriginalColumnIndex,
+                          cellDiff.DstCell.Value));
+            }
+
+            return changes.Count == 0 ? null : changes;
+        }
+
+        /// <summary>
+        /// 收集选中范围所触达的 diff 行索引。第二项=true 表示应走"整行同步"：
+        /// 只要有任何一行是整行选中 或 结构行(新增/删除行)，就按行级处理。
+        /// 未选中任何行返回 null。
+        /// </summary>
+        private Tuple<HashSet<int>, bool> CollectSelectedRowsAndMode(ExcelDiffDirection direction)
+        {
+            var srcToDst = direction == ExcelDiffDirection.SrcToDst;
+            var grid = GetActiveSelectionGrid(direction);
+            var model = grid.Model as DiffGridModel;
+            if (model == null)
+                return null;
+
+            var rowIndexes = new HashSet<int>();
+            var rowLevel = false;
+
+            foreach (var group in grid.SelectedCells.GroupBy(c => c.Row.Value))
+            {
+                var diffIndex = model.GetRowDiffIndexForVisualRow(group.Key);
+                if (diffIndex < 0)
+                    continue;
+
+                rowIndexes.Add(diffIndex);
+
+                ExcelRowDiff rowDiff;
+                if (!currentSheetDiff.Rows.TryGetValue(diffIndex, out rowDiff))
+                    continue;
+
+                var isStructural = rowDiff.Cells.Count > 0 && (rowDiff.IsAdded() || rowDiff.IsRemoved());
+                var fullRow = group.Count() >= model.ColumnCount;
+                if (isStructural || fullRow)
+                    rowLevel = true;
+            }
+
+            return rowIndexes.Count == 0 ? null : Tuple.Create(rowIndexes, rowLevel);
+        }
+
+        /// <summary>
+        /// 整列选中检测：某列的选中格数 ≥ 网格可视行数（用户拖选整列时会覆盖所有可见行）。
+        /// 未选中整列返回 null。
+        /// </summary>
+        private Tuple<HashSet<int>, bool> CollectSelectedColumns(ExcelDiffDirection direction)
+        {
+            var srcToDst = direction == ExcelDiffDirection.SrcToDst;
+            var grid = GetActiveSelectionGrid(direction);
+            var model = grid.Model as DiffGridModel;
+            if (model == null)
+                return null;
+
+            var cells = grid.SelectedCells
+                .Where(c => c.Row.HasValue && c.Column.HasValue)
+                .ToList();
+
+            if (cells.Count < 2)
+                return null;
+
+            var distinctColumns = cells.Select(c => c.Column.Value).Distinct().Count();
+            var distinctRows = cells.Select(c => c.Row.Value).Distinct().Count();
+
+            // 同一列、跨多行，且(该列为结构列 或 覆盖全部行) → 列意图
+            if (distinctColumns == 1 && distinctRows >= 2)
+            {
+                var col = cells[0].Column.Value;
+                var isStructural = currentSheetDiff != null && currentSheetDiff.ColumnStatusMap != null
+                    && currentSheetDiff.ColumnStatusMap.ContainsKey(col)
+                    && (currentSheetDiff.ColumnStatusMap[col] == ExcelColumnStatus.Inserted
+                        || currentSheetDiff.ColumnStatusMap[col] == ExcelColumnStatus.Deleted);
+
+                if (isStructural || distinctRows >= model.RowCount)
+                    return Tuple.Create(new HashSet<int> { col }, true);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 选中的来源网格：优先用用户最后点选/选中的网格，方向不再决定"必须选在哪侧"。
+        /// </summary>
+        private FastGridControl GetActiveSelectionGrid(ExcelDiffDirection direction)
+        {
+            if (copyTargetGrid != null && copyTargetGrid.SelectedCells.Any())
+                return copyTargetGrid;
+
+            return direction == ExcelDiffDirection.SrcToDst ? SrcDataGrid : DstDataGrid;
+        }
+
+        /// <summary>列头点击：记录明确的列同步意图。</summary>
+        private void SetPendingColumn(FastGridControl grid, int column)
+        {
+            pendingColumnGrid = grid;
+            pendingColumnIndex = column;
+        }
+
+        private void ApplyColumnToDst_Click(object sender, RoutedEventArgs e)
+        {
+            ApplySingleColumn(SrcDataGrid, ExcelDiffDirection.SrcToDst);
+        }
+
+        private void ApplyColumnToSrc_Click(object sender, RoutedEventArgs e)
+        {
+            ApplySingleColumn(DstDataGrid, ExcelDiffDirection.DstToSrc);
+        }
+
+        private void ApplySingleColumn(FastGridControl grid, ExcelDiffDirection direction)
+        {
+            if (currentSheetDiff == null)
+            {
+                MessageBox.Show("请先执行一次对比。", "同步本列", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var col = grid.CurrentCell.Column;
+            if (!col.HasValue)
+            {
+                MessageBox.Show("无法确定要同步的列，请先点击该列的表头单元格。", "同步本列", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var srcToDst = direction == ExcelDiffDirection.SrcToDst;
+            var targetPath = srcToDst ? DstPathTextBox.Text : SrcPathTextBox.Text;
+            var targetSheet = (srcToDst ? DstSheetCombobox.SelectedItem : SrcSheetCombobox.SelectedItem)?.ToString();
+            var alignedCol = col.Value;
+
+            var model = grid.Model as DiffGridModel;
+            var colName = DiffGridModel.GetExcelColumnLetter(alignedCol) + "列";
+
+            var msg = string.Format("从 {0} 同步列 “{1}” 到 {2}。\n{3}\n\n目标文件: {4}",
+                srcToDst ? "左侧" : "右侧", colName,
+                srcToDst ? "右侧" : "左侧",
+                DescribeColumnOps(new HashSet<int> { alignedCol }, direction), targetPath);
+
+            if (MessageBox.Show(msg, "同步本列", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return;
+
+            var applier = new ExcelDiffApplier();
+            var r = applier.ApplyColumns(currentSheetDiff, targetPath, targetSheet, direction, new List<int> { alignedCol });
+            MessageBox.Show(r.Message, "应用结果", MessageBoxButton.OK,
+                r.IsSuccess ? MessageBoxImage.Information : MessageBoxImage.Error);
+
+            if (r.IsSuccess)
+                ExecuteDiff();
+        }
+
+        /// <summary>列的同步摘要（"同步本列/整列"确认弹窗用，不展示数据明细）。</summary>
+        private string DescribeColumnOps(HashSet<int> columns, ExcelDiffDirection direction)
+        {
+            var structural = columns.Any(c => currentSheetDiff.ColumnStatusMap != null
+                && currentSheetDiff.ColumnStatusMap.ContainsKey(c)
+                && (currentSheetDiff.ColumnStatusMap[c] == ExcelColumnStatus.Inserted
+                    || currentSheetDiff.ColumnStatusMap[c] == ExcelColumnStatus.Deleted));
+
+            if (structural)
+                return "  含新增/删除列 → 将按方向整体插入/删除到目标文件";
+
+            var total = 0;
+            foreach (var c in columns)
+            {
+                foreach (var row in currentSheetDiff.Rows.Values)
+                {
+                    ExcelCellDiff cell;
+                    if (row.Cells.TryGetValue(c, out cell) && cell.Status == ExcelCellStatus.Modified)
+                        total++;
+                }
+            }
+
+            return "  共 " + total + " 个差异格，将值同步到目标文件";
+        }
+
+        /// <summary>行的同步摘要（"同步选中行"确认弹窗用，只统计操作类型，不展示数据）。</summary>
+        private string DescribeRowOperations(HashSet<int> diffRowIndexes, ExcelDiffDirection direction)
+        {
+            var srcToDst = direction == ExcelDiffDirection.SrcToDst;
+            var insert = 0;
+            var del = 0;
+            var modify = 0;
+
+            foreach (var idx in diffRowIndexes)
+            {
+                ExcelRowDiff rowDiff;
+                if (!currentSheetDiff.Rows.TryGetValue(idx, out rowDiff) || rowDiff.Cells.Count == 0)
+                    continue;
+
+                if (rowDiff.IsAdded() || rowDiff.IsRemoved())
+                {
+                    if (srcToDst)
+                    {
+                        if (rowDiff.IsAdded()) del++;
+                        else insert++;
+                    }
+                    else
+                    {
+                        if (rowDiff.IsAdded()) insert++;
+                        else del++;
+                    }
+                }
+                else
+                {
+                    modify++;
+                }
+            }
+
+            var parts = new List<string>();
+            if (insert > 0) parts.Add("插入 " + insert + " 行");
+            if (del > 0) parts.Add("删除 " + del + " 行");
+            if (modify > 0) parts.Add("整行值回写 " + modify + " 行");
+
+            return parts.Count == 0 ? "  (仅值差异格)" : "  " + string.Join("；", parts);
+        }
+
+        private string DescribeFullDiff(ExcelDiffDirection direction)
+        {
+            var srcToDst = direction == ExcelDiffDirection.SrcToDst;
+            var modCells = 0;
+            var addRows = 0;
+            var remRows = 0;
+            var addCols = 0;
+            var remCols = 0;
+
+            foreach (var row in currentSheetDiff.Rows.Values)
+            {
+                if (row.IsAdded()) addRows++;
+                else if (row.IsRemoved()) remRows++;
+
+                foreach (var c in row.Cells.Values)
+                    if (c.Status == ExcelCellStatus.Modified) modCells++;
+            }
+
+            if (currentSheetDiff.ColumnStatusMap != null)
+            {
+                foreach (var kv in currentSheetDiff.ColumnStatusMap)
+                {
+                    if (kv.Value == ExcelColumnStatus.Inserted) addCols++;
+                    else if (kv.Value == ExcelColumnStatus.Deleted) remCols++;
+                }
+            }
+
+            var parts = new List<string>();
+            if (modCells > 0) parts.Add("值差异 " + modCells + " 格");
+            if (addRows > 0) parts.Add((srcToDst ? "删除右侧 " : "插入左侧 ") + addRows + " 行");
+            if (remRows > 0) parts.Add((srcToDst ? "插入右侧 " : "删除左侧 ") + remRows + " 行");
+            if (addCols > 0) parts.Add((srcToDst ? "删除右侧 " : "插入左侧 ") + addCols + " 列");
+            if (remCols > 0) parts.Add((srcToDst ? "插入右侧 " : "删除左侧 ") + remCols + " 列");
+
+            return parts.Count == 0 ? "\n  (无差异)" : "\n  " + string.Join("；", parts);
+        }
+
         private ExcelSheetReadConfig CreateReadConfig()
         {
             var setting = ((App)Application.Current).Setting;
@@ -456,6 +873,7 @@ namespace ExcelMerge.GUI.Views
                 MessageBox.Show(Properties.Resources.Msg_WarnSize);
 
             var diff = ExecuteDiff(srcSheet, dstSheet);
+            currentSheetDiff = diff;
             SrcDataGrid.Model = new DiffGridModel(diff, DiffType.Source);
             DstDataGrid.Model = new DiffGridModel(diff, DiffType.Dest);
 
@@ -569,26 +987,6 @@ namespace ExcelMerge.GUI.Views
                     DataGridEventDispatcher.Instance.DispatchColumnHeaderResetEvent(args);
                 }
             }
-        }
-
-        private void SwapButton_Click(object sender, RoutedEventArgs e)
-        {
-            Swap();
-        }
-
-        private void Swap()
-        {
-            var srcTmp = SrcSheetCombobox.SelectedIndex;
-            var dstTmp = DstSheetCombobox.SelectedIndex;
-
-            var tmp = SrcPathTextBox.Text;
-            SrcPathTextBox.Text = DstPathTextBox.Text;
-            DstPathTextBox.Text = tmp;
-
-            diffConfig.SrcSheetIndex = dstTmp;
-            diffConfig.DstSheetIndex = srcTmp;
-
-            ExecuteDiff();
         }
 
         private void DiffByHeaderSrc_Click(object sender, RoutedEventArgs e)

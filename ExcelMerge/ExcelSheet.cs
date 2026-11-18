@@ -185,6 +185,7 @@ namespace ExcelMerge
             }
 
             var sheetDiff = new ExcelSheetDiff();
+            sheetDiff.ColumnStatusMap = columnStatusMap;
             DiffCells(resultArray, sheetDiff, columnStatusMap);
 
             return sheetDiff;

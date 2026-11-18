@@ -37,9 +37,19 @@
       <Expander.Header>
         <WrapPanel Orientation="Horizontal" Margin="3">
 
-          <Button x:Name="DiffButton" Content="{x:Static props:Resources.Button_ExtractDiff}" 
+          <Button x:Name="DiffButton" Content="{x:Static props:Resources.Button_ExtractDiff}"
                   Margin="10,0,0,0" Height="40" Padding="5,5"
                   Click="DiffButton_Click"
+                  IsEnabled="{Binding Executable}"/>
+
+          <Button x:Name="ApplyToDstButton" Content="→" Width="38" Height="40" Margin="12,0,0,0" Padding="4,5"
+                  ToolTip="把左侧(src)的改动应用到右侧(dst)文件"
+                  Click="ApplyToDstButton_Click"
+                  IsEnabled="{Binding Executable}"/>
+
+          <Button x:Name="ApplyToSrcButton" Content="←" Width="38" Height="40" Margin="6,0,0,0" Padding="4,5"
+                  ToolTip="把右侧(dst)的改动应用到左侧(src)文件"
+                  Click="ApplyToSrcButton_Click"
                   IsEnabled="{Binding Executable}"/>
 
           <GroupBox Header="{x:Static props:Resources.GroupBox_DisplayFormat}"
@@ -227,11 +237,6 @@
 
       <WrapPanel Orientation="Horizontal" Margin="3">
 
-        <Button x:Name="SwapButton" Content="{x:Static props:Resources.ToolTip_Swap}"
-                Height="40"
-                Click="SwapButton_Click" Margin="33,0,0,0" Padding="5,5"
-                IsEnabled="{Binding Executable}"/>
-
         <GroupBox Header="{x:Static props:Resources.Word_Search}" Margin="10,0,0,0">
           <StackPanel Orientation="Horizontal">
             <ComboBox x:Name="SearchTextCombobox" Width="200" IsEditable="True" Margin="3"/>
@@ -307,6 +312,7 @@
           <MenuItem Header="{x:Static props:Resources.ContextMenu_SetColumnHeader}" Click="SetColumnHeader_Click" />
           <MenuItem Header="{x:Static props:Resources.ContextMenu_ResetColumnHeader}" Click="ResetColumnHeader_Click" />
           <MenuItem Header="{x:Static props:Resources.ContextMenu_DiffAsHeader}" Click="DiffByHeaderSrc_Click" />
+          <MenuItem Header="同步本列 → 应用到右侧文件" Click="ApplyColumnToDst_Click" />
           <MenuItem Header="{x:Static props:Resources.ContextMenu_BuildCellBaseLog}" Click="BuildCellBaseLog_Click"/>
           <MenuItem Header="{x:Static props:Resources.ContextMenu_CopyAsTsv}" Click="CopyAsTsv_Click" InputGestureText="Ctrl + c"/>
           <MenuItem Header="{x:Static props:Resources.ContextMenu_CopyAsCsv}" Click="CopyAsCsv_Click" InputGestureText="Ctrl + C"/>
@@ -349,6 +355,7 @@
           <MenuItem Header="{x:Static props:Resources.ContextMenu_SetColumnHeader}" Click="SetColumnHeader_Click" />
           <MenuItem Header="{x:Static props:Resources.ContextMenu_ResetColumnHeader}" Click="ResetColumnHeader_Click" />
           <MenuItem Header="{x:Static props:Resources.ContextMenu_DiffAsHeader}" Click="DiffByHeaderDst_Click" />
+          <MenuItem Header="同步本列 → 应用到左侧文件" Click="ApplyColumnToSrc_Click" />
           <MenuItem Header="{x:Static props:Resources.ContextMenu_BuildCellBaseLog}" Click="BuildCellBaseLog_Click"/>
           <MenuItem Header="{x:Static props:Resources.ContextMenu_CopyAsTsv}" Click="CopyAsTsv_Click" InputGestureText="Ctrl + c"/>
           <MenuItem Header="{x:Static props:Resources.ContextMenu_CopyAsCsv}" Click="CopyAsCsv_Click" InputGestureText="Ctrl + C"/>
