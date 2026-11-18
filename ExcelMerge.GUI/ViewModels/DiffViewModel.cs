@@ -62,21 +62,47 @@ namespace ExcelMerge.GUI.ViewModels
         public int SelectedSrcSheetIndex
         {
             get { return selectedSrcSheetIndex; }
-            set { SetProperty(ref selectedSrcSheetIndex, value); }
+            set
+            {
+                SetProperty(ref selectedSrcSheetIndex, value);
+                UpdateOtherSheetsExecutableFlag();
+            }
         }
 
         private int selectedDstSheetIndex;
         public int SelectedDstSheetIndex
         {
             get { return selectedDstSheetIndex; }
-            set { SetProperty(ref selectedDstSheetIndex, value); }
+            set
+            {
+                SetProperty(ref selectedDstSheetIndex, value);
+                UpdateOtherSheetsExecutableFlag();
+            }
         }
 
         private bool executable;
         public bool Executable
         {
             get { return executable; }
-            private set { SetProperty(ref executable, value); }
+            private set
+            {
+                SetProperty(ref executable, value);
+                UpdateOtherSheetsExecutableFlag();
+            }
+        }
+
+        private bool executableNext;
+        public bool ExecutableNext
+        {
+            get { return executableNext; }
+            private set { SetProperty(ref executableNext, value); }
+        }
+
+        private bool executablePrev;
+        public bool ExecutablePrev
+        {
+            get { return executablePrev; }
+            private set { SetProperty(ref executablePrev, value); }
         }
 
         private int modifiedCellCount;
@@ -114,6 +140,14 @@ namespace ExcelMerge.GUI.ViewModels
             private set { SetProperty(ref description, value); }
         }
 
+        private ObservableCollection<ExcelSheetDiffInfo> sheetDiffInfoList =
+            new ObservableCollection<ExcelSheetDiffInfo>();
+        public ObservableCollection<ExcelSheetDiffInfo> SheetDiffInfoList
+        {
+            get { return sheetDiffInfoList; }
+            private set { SetProperty(ref sheetDiffInfoList, value); }
+        }
+
         public DiffViewModel()
         {
             Description = new DragAcceptDescription();
@@ -138,6 +172,48 @@ namespace ExcelMerge.GUI.ViewModels
             ModifiedRowCount = summary.ModifiedRowCount;
             AddedRowCount = summary.AddedRowCount;
             RemovedRowCount = summary.RemovedRowCount;
+        }
+
+        public void AddSheetDiff(ExcelSheetDiff diff)
+        {
+            if (SheetDiffInfoList
+                .Any(i => i.SheetDiff.SrcSheet.Name == diff.SrcSheet.Name &&
+                          i.SheetDiff.DstSheet.Name == diff.DstSheet.Name))
+                return;
+
+            SheetDiffInfoList.Add(new ExcelSheetDiffInfo(diff));
+        }
+
+        public int GetSrcSheetIndex(string name)
+        {
+            return SrcSheetNames?.IndexOf(name) ?? -1;
+        }
+
+        public int GetDstSheetIndex(string name)
+        {
+            return DstSheetNames?.IndexOf(name) ?? -1;
+        }
+
+        public IEnumerable<Tuple<string, string>> GetSheetNamePairs()
+        {
+            if (SrcSheetNames == null || DstSheetNames == null)
+                return Enumerable.Empty<Tuple<string, string>>();
+
+            return SrcSheetNames.Zip(DstSheetNames, (s, d) => Tuple.Create(s, d));
+        }
+
+        private void UpdateOtherSheetsExecutableFlag()
+        {
+            var srcCount = srcSheetNames != null ? srcSheetNames.Count : 0;
+            var dstCount = dstSheetNames != null ? dstSheetNames.Count : 0;
+
+            ExecutableNext = Executable &&
+                SelectedSrcSheetIndex + 1 < srcCount &&
+                SelectedDstSheetIndex + 1 < dstCount;
+
+            ExecutablePrev = Executable &&
+                SelectedSrcSheetIndex - 1 >= 0 &&
+                SelectedDstSheetIndex - 1 >= 0;
         }
 
         private void Mwv_PropertyChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -236,6 +312,22 @@ namespace ExcelMerge.GUI.ViewModels
             }
 
             Executable = existsSrc && existsDst;
+        }
+    }
+
+    public class ExcelSheetDiffInfo
+    {
+        public ExcelSheetDiff SheetDiff { get; }
+        public bool IsNotified { get; set; }
+
+        public ExcelSheetDiffInfo(ExcelSheetDiff sheetDiff)
+        {
+            SheetDiff = sheetDiff;
+        }
+
+        public override string ToString()
+        {
+            return SheetDiff?.ToString();
         }
     }
 }

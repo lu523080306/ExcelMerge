@@ -38,19 +38,56 @@
         <WrapPanel Orientation="Horizontal" Margin="3">
 
           <Button x:Name="DiffButton" Content="{x:Static props:Resources.Button_ExtractDiff}"
-                  Margin="10,0,0,0" Height="40" Padding="5,5"
+                  ToolTip="{x:Static props:Resources.ToolTip_ExtractDiff}"
+                  Margin="5,0,0,0"
+                  Height="32"
+                  Padding="3"
                   Click="DiffButton_Click"
                   IsEnabled="{Binding Executable}"/>
 
-          <Button x:Name="ApplyToDstButton" Content="→" Width="38" Height="40" Margin="12,0,0,0" Padding="4,5"
-                  ToolTip="把左侧(src)的改动应用到右侧(dst)文件"
-                  Click="ApplyToDstButton_Click"
+          <Button x:Name="SwapButton" Content="{x:Static props:Resources.Button_Swap}"
+                  ToolTip="{x:Static props:Resources.ToolTip_Swap}"
+                  Click="SwapButton_Click"
+                  Margin="5,0,0,0"
+                  Height="32"
+                  Padding="3"
                   IsEnabled="{Binding Executable}"/>
 
-          <Button x:Name="ApplyToSrcButton" Content="←" Width="38" Height="40" Margin="6,0,0,0" Padding="4,5"
-                  ToolTip="把右侧(dst)的改动应用到左侧(src)文件"
-                  Click="ApplyToSrcButton_Click"
-                  IsEnabled="{Binding Executable}"/>
+          <Button x:Name="PrevSheetButton" Content="{x:Static props:Resources.Button_PrevSheet}"
+                  ToolTip="{x:Static props:Resources.ToolTip_PrevSheet}"
+                  Click="PrevSheetButton_Click"
+                  Margin="5,0,0,0"
+                  Height="32"
+                  Padding="3"
+                  IsEnabled="{Binding ExecutablePrev}"/>
+
+          <Button x:Name="NextSheetButton" Content="{x:Static props:Resources.Button_NextSheet}"
+                  ToolTip="{x:Static props:Resources.ToolTip_NextSheet}"
+                  Click="NextSheetButton_Click"
+                  Margin="5,0,0,0"
+                  Height="32"
+                  Padding="3"
+                  IsEnabled="{Binding ExecutableNext}"/>
+
+          <ComboBox Margin="5,0,0,0"
+                    Width="25" Height="32"
+                    ItemsSource="{Binding SheetDiffInfoList}"
+                    x:Name="SelectedSheetDiffCombobox"
+                    SelectionChanged="SelectedSheetDiffCombobox_SelectionChanged"
+                    >
+            <ComboBox.ItemContainerStyle>
+              <Style TargetType="{x:Type ComboBoxItem}">
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding SheetDiff.HasAnyChanges}" Value="True">
+                    <Setter Property="Background" Value="Red" />
+                  </DataTrigger>
+                  <DataTrigger Binding="{Binding SheetDiff.HasAnyChanges}" Value="False">
+                    <Setter Property="Background" Value="White" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </ComboBox.ItemContainerStyle>
+          </ComboBox>
 
           <GroupBox Header="{x:Static props:Resources.GroupBox_DisplayFormat}"
                     Margin="10,0,0,0">
@@ -257,6 +294,18 @@
       </WrapPanel>
 
     </Expander>
+
+    <!-- 左右对比中轴线：同步方向按钮（→ 应用左→右 / ← 应用右→左） -->
+    <StackPanel Grid.Column="3" Grid.Row="1" VerticalAlignment="Top" Margin="4,10,4,0">
+      <Button x:Name="ApplyToDstButton" Content="→" Width="36" Height="36" Margin="0,0,0,6" Padding="3,3"
+              ToolTip="把左侧(src)的改动应用到右侧(dst)文件"
+              Click="ApplyToDstButton_Click"
+              IsEnabled="{Binding Executable}"/>
+      <Button x:Name="ApplyToSrcButton" Content="←" Width="36" Height="36" Padding="3,3"
+              ToolTip="把右侧(dst)的改动应用到左侧(src)文件"
+              Click="ApplyToSrcButton_Click"
+              IsEnabled="{Binding Executable}"/>
+    </StackPanel>
 
     <!--Src Location Grid-->
     <Border BorderBrush="LightGray" BorderThickness="1" Grid.Column="0" Grid.Row="1" Margin="5, 5, 5, 20">

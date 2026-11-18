@@ -5,10 +5,25 @@ namespace ExcelMerge
 {
     public class ExcelSheetDiff
     {
+        public ExcelSheet SrcSheet { get; set; }
+        public ExcelSheet DstSheet { get; set; }
         public SortedDictionary<int, ExcelRowDiff> Rows { get; private set; }
 
         /// <summary>对齐列 → 列状态（None/Inserted/Deleted），V2 结构级应用需要。</summary>
         public Dictionary<int, ExcelColumnStatus> ColumnStatusMap { get; set; }
+
+        private bool? hasAnyChanges;
+        /// <summary>该 sheet 对是否存在任何差异（供 sheet 状态下拉着色使用）。</summary>
+        public bool HasAnyChanges
+        {
+            get
+            {
+                if (!hasAnyChanges.HasValue)
+                    hasAnyChanges = CreateSummary().HasDiff;
+
+                return hasAnyChanges.Value;
+            }
+        }
 
         public ExcelSheetDiff()
         {
@@ -49,6 +64,11 @@ namespace ExcelMerge
                 ModifiedRowCount = modifiedRowCount,
                 ModifiedCellCount = modifiedCellCount,
             };
+        }
+
+        public override string ToString()
+        {
+            return $"{SrcSheet?.Name} {DstSheet?.Name}";
         }
     }
 }

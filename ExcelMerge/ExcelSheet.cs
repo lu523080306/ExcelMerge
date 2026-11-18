@@ -9,6 +9,7 @@ namespace ExcelMerge
 {
     public class ExcelSheet
     {
+        public string Name { get; set; }
         public SortedDictionary<int, ExcelRow> Rows { get; private set; }
 
         public ExcelSheet()
@@ -185,6 +186,8 @@ namespace ExcelMerge
             }
 
             var sheetDiff = new ExcelSheetDiff();
+            sheetDiff.SrcSheet = src;
+            sheetDiff.DstSheet = dst;
             sheetDiff.ColumnStatusMap = columnStatusMap;
             DiffCells(resultArray, sheetDiff, columnStatusMap);
 

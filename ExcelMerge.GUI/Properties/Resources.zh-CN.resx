@@ -120,6 +120,24 @@
   <data name="Button_ExtractDiff" xml:space="preserve">
     <value>只显示差异</value>
   </data>
+  <data name="Button_Swap" xml:space="preserve">
+    <value>交换</value>
+  </data>
+  <data name="Button_PrevSheet" xml:space="preserve">
+    <value>上一张</value>
+  </data>
+  <data name="Button_NextSheet" xml:space="preserve">
+    <value>下一张</value>
+  </data>
+  <data name="ToolTip_ExtractDiff" xml:space="preserve">
+    <value>提取差异</value>
+  </data>
+  <data name="ToolTip_PrevSheet" xml:space="preserve">
+    <value>提取并显示上一张 sheet 的差异 (Ctrl + PageUp)</value>
+  </data>
+  <data name="ToolTip_NextSheet" xml:space="preserve">
+    <value>提取并显示下一张 sheet 的差异 (Ctrl + PageDown)</value>
+  </data>
   <data name="Label_SkipFirstBlankRows" xml:space="preserve">
     <value>忽略第一个空白行</value>
   </data>

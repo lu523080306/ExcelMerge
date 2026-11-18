@@ -29,7 +29,9 @@ namespace ExcelMerge
                 for (int i = 0; i < srcWb.NumberOfSheets; i++)
                 {
                     var srcSheet = srcWb.GetSheetAt(i);
-                    wb.Sheets.Add(srcSheet.SheetName, ExcelSheet.Create(srcSheet, config));
+                    var sheet = ExcelSheet.Create(srcSheet, config);
+                    sheet.Name = srcSheet.SheetName;
+                    wb.Sheets.Add(srcSheet.SheetName, sheet);
                 }
             }
             finally
@@ -82,7 +84,9 @@ namespace ExcelMerge
         private static ExcelWorkbook CreateFromCsv(string path, ExcelSheetReadConfig config)
         {
             var wb = new ExcelWorkbook();
-            wb.Sheets.Add(Path.GetFileName(path), ExcelSheet.CreateFromCsv(path, config));
+            var sheet = ExcelSheet.CreateFromCsv(path, config);
+            sheet.Name = Path.GetFileName(path);
+            wb.Sheets.Add(Path.GetFileName(path), sheet);
 
             return wb;
         }
@@ -90,7 +94,9 @@ namespace ExcelMerge
         private static ExcelWorkbook CreateFromTsv(string path, ExcelSheetReadConfig config)
         {
             var wb = new ExcelWorkbook();
-            wb.Sheets.Add(Path.GetFileName(path), ExcelSheet.CreateFromTsv(path, config));
+            var sheet = ExcelSheet.CreateFromTsv(path, config);
+            sheet.Name = Path.GetFileName(path);
+            wb.Sheets.Add(Path.GetFileName(path), sheet);
 
             return wb;
         }

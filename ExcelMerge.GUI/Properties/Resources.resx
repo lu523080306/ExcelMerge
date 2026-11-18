@@ -120,6 +120,24 @@
   <data name="Button_ExtractDiff" xml:space="preserve">
     <value>Extract Diff</value>
   </data>
+  <data name="Button_Swap" xml:space="preserve">
+    <value>Swap</value>
+  </data>
+  <data name="Button_PrevSheet" xml:space="preserve">
+    <value>Prev</value>
+  </data>
+  <data name="Button_NextSheet" xml:space="preserve">
+    <value>Next</value>
+  </data>
+  <data name="ToolTip_ExtractDiff" xml:space="preserve">
+    <value>Extract diff</value>
+  </data>
+  <data name="ToolTip_PrevSheet" xml:space="preserve">
+    <value>Extract and show prev sheets diff (Ctrl + PageUp)</value>
+  </data>
+  <data name="ToolTip_NextSheet" xml:space="preserve">
+    <value>Extract and show next sheets diff (Ctrl + PageDown)</value>
+  </data>
   <data name="Label_SkipFirstBlankRows" xml:space="preserve">
     <value>Skip first blank rows</value>
   </data>

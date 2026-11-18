@@ -68,7 +68,61 @@ namespace ExcelMerge.GUI.Properties {
                 return ResourceManager.GetString("Button_ExtractDiff", resourceCulture);
             }
         }
-        
+
+        /// <summary>
+        ///   Swap に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Button_Swap {
+            get {
+                return ResourceManager.GetString("Button_Swap", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Prev に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Button_PrevSheet {
+            get {
+                return ResourceManager.GetString("Button_PrevSheet", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Next に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Button_NextSheet {
+            get {
+                return ResourceManager.GetString("Button_NextSheet", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Extract diff に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string ToolTip_ExtractDiff {
+            get {
+                return ResourceManager.GetString("ToolTip_ExtractDiff", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Extract and show prev sheets diff (Ctrl + PageUp) に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string ToolTip_PrevSheet {
+            get {
+                return ResourceManager.GetString("ToolTip_PrevSheet", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Extract and show next sheets diff (Ctrl + PageDown) に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string ToolTip_NextSheet {
+            get {
+                return ResourceManager.GetString("ToolTip_NextSheet", resourceCulture);
+            }
+        }
+
         /// <summary>
         ///   Output Log に類似しているローカライズされた文字列を検索します。
         /// </summary>

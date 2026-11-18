@@ -27,6 +27,7 @@ namespace ExcelMerge.GUI.Views
         private IUnityContainer container;
         private FastGridControl pendingColumnGrid;
         private int? pendingColumnIndex;
+        private bool isLock;
         private const string srcKey = "src";
         private const string dstKey = "dst";
 
@@ -835,19 +836,7 @@ namespace ExcelMerge.GUI.Views
             return Tuple.Create(srcSetting, dstSetting);
         }
 
-        private ExcelSheetDiff ExecuteDiff(ExcelSheet srcSheet, ExcelSheet dstSheet)
-        {
-            ExcelSheetDiff diff = null;
-            ProgressWindow.DoWorkWithModal(progress =>
-            {
-                progress.Report(Properties.Resources.Msg_ExtractingDiff);
-                diff = ExcelSheet.Diff(srcSheet, dstSheet, diffConfig);
-            });
-
-            return diff;
-        }
-
-        private void ExecuteDiff(bool isStartup = false)
+        private void ExecuteDiff(bool isStartup = false, ExcelSheetDiff specificSheetDiff = null)
         {
             if (!File.Exists(SrcPathTextBox.Text) || !File.Exists(DstPathTextBox.Text))
                 return;
@@ -855,25 +844,78 @@ namespace ExcelMerge.GUI.Views
             var args = new DiffViewEventArgs<FastGridControl>(null, container, TargetType.First);
             DataGridEventDispatcher.Instance.DispatchPreExecuteDiffEvent(args);
 
-            var workbooks = ReadWorkbooks();
-            var srcWorkbook = workbooks.Item1;
-            var dstWorkbook = workbooks.Item2;
+            ExcelSheetDiff diff = specificSheetDiff;
 
-            var fileSettings = FindFileSettings(isStartup);
-            var srcFileSetting = fileSettings.Item1;
-            var dstFileSetting = fileSettings.Item2;
+            FileSetting srcFileSetting = null;
+            FileSetting dstFileSetting = null;
 
-            SrcSheetCombobox.SelectedIndex = diffConfig.SrcSheetIndex;
-            DstSheetCombobox.SelectedIndex = diffConfig.DstSheetIndex;
+            if (diff == null)
+            {
+                var workbooks = ReadWorkbooks();
+                var srcWorkbook = workbooks.Item1;
+                var dstWorkbook = workbooks.Item2;
 
-            var srcSheet = srcWorkbook.Sheets[SrcSheetCombobox.SelectedItem.ToString()];
-            var dstSheet = dstWorkbook.Sheets[DstSheetCombobox.SelectedItem.ToString()];
+                var fileSettings = FindFileSettings(isStartup);
+                srcFileSetting = fileSettings.Item1;
+                dstFileSetting = fileSettings.Item2;
 
-            if (srcSheet.Rows.Count > 10000 || dstSheet.Rows.Count > 10000)
-                MessageBox.Show(Properties.Resources.Msg_WarnSize);
+                SrcSheetCombobox.SelectedIndex = diffConfig.SrcSheetIndex;
+                DstSheetCombobox.SelectedIndex = diffConfig.DstSheetIndex;
 
-            var diff = ExecuteDiff(srcSheet, dstSheet);
+                // 批量提取：对全部分组的 sheet 对逐个 diff，供右上角 sheet 状态下拉着色
+                GetViewModel().SheetDiffInfoList.Clear();
+                foreach (var names in GetViewModel().GetSheetNamePairs())
+                {
+                    ExcelSheet srcSheet;
+                    ExcelSheet dstSheet;
+                    if (!srcWorkbook.Sheets.TryGetValue(names.Item1, out srcSheet) ||
+                        !dstWorkbook.Sheets.TryGetValue(names.Item2, out dstSheet))
+                        continue;
+
+                    if (srcSheet.Rows.Count > 10000 || dstSheet.Rows.Count > 10000)
+                        MessageBox.Show(Properties.Resources.Msg_WarnSize);
+
+                    GetViewModel().AddSheetDiff(ExcelSheet.Diff(srcSheet, dstSheet, diffConfig));
+                }
+
+                var srcName = SrcSheetCombobox.SelectedItem?.ToString();
+                var dstName = DstSheetCombobox.SelectedItem?.ToString();
+                diff = GetViewModel().SheetDiffInfoList
+                    .FirstOrDefault(i => i.SheetDiff.SrcSheet.Name == srcName &&
+                                         i.SheetDiff.DstSheet.Name == dstName)?.SheetDiff;
+
+                // 当前对没被按位配对覆盖（如右侧 sheet 数量不同）→ 单独 diff 一次补上
+                if (diff == null && srcName != null && dstName != null)
+                {
+                    ExcelSheet srcSheet;
+                    ExcelSheet dstSheet;
+                    if (srcWorkbook.Sheets.TryGetValue(srcName, out srcSheet) &&
+                        dstWorkbook.Sheets.TryGetValue(dstName, out dstSheet))
+                    {
+                        diff = ExcelSheet.Diff(srcSheet, dstSheet, diffConfig);
+                        GetViewModel().AddSheetDiff(diff);
+                    }
+                }
+
+                if (diff == null)
+                    return;
+            }
+            else
+            {
+                var fileSettings = FindFileSettings(isStartup);
+                srcFileSetting = fileSettings.Item1;
+                dstFileSetting = fileSettings.Item2;
+
+                SrcSheetCombobox.SelectedIndex = diffConfig.SrcSheetIndex;
+                DstSheetCombobox.SelectedIndex = diffConfig.DstSheetIndex;
+            }
+
             currentSheetDiff = diff;
+            SrcSheetCombobox.SelectedIndex = GetViewModel().GetSrcSheetIndex(diff.SrcSheet.Name);
+            DstSheetCombobox.SelectedIndex = GetViewModel().GetDstSheetIndex(diff.DstSheet.Name);
+            diffConfig.SrcSheetIndex = SrcSheetCombobox.SelectedIndex;
+            diffConfig.DstSheetIndex = DstSheetCombobox.SelectedIndex;
+
             SrcDataGrid.Model = new DiffGridModel(diff, DiffType.Source);
             DstDataGrid.Model = new DiffGridModel(diff, DiffType.Dest);
 
@@ -987,6 +1029,90 @@ namespace ExcelMerge.GUI.Views
                     DataGridEventDispatcher.Instance.DispatchColumnHeaderResetEvent(args);
                 }
             }
+        }
+
+        private void SwapButton_Click(object sender, RoutedEventArgs e)
+        {
+            Swap();
+        }
+
+        private void Swap()
+        {
+            var srcTmp = SrcSheetCombobox.SelectedIndex;
+            var dstTmp = DstSheetCombobox.SelectedIndex;
+
+            var tmp = SrcPathTextBox.Text;
+            SrcPathTextBox.Text = DstPathTextBox.Text;
+            DstPathTextBox.Text = tmp;
+
+            diffConfig.SrcSheetIndex = dstTmp;
+            diffConfig.DstSheetIndex = srcTmp;
+
+            ExecuteDiff();
+        }
+
+        private void PrevSheetButton_Click(object sender, RoutedEventArgs e)
+        {
+            ShowPrevSheetDiff();
+        }
+
+        private void NextSheetButton_Click(object sender, RoutedEventArgs e)
+        {
+            ShowNextSheetDiff();
+        }
+
+        private void SelectedSheetDiffCombobox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        {
+            var diffInfo = (sender as ComboBox)?.SelectedItem as ExcelSheetDiffInfo;
+            if (diffInfo == null)
+                return;
+
+            SrcSheetCombobox.SelectedItem = diffInfo.SheetDiff.SrcSheet.Name;
+            DstSheetCombobox.SelectedItem = diffInfo.SheetDiff.DstSheet.Name;
+
+            ExecuteDiff(specificSheetDiff: diffInfo.SheetDiff);
+        }
+
+        private void ShowNextSheetDiff()
+        {
+            if (isLock)
+                return;
+
+            if (SrcSheetCombobox.SelectedIndex + 1 >= SrcSheetCombobox.Items.Count ||
+                DstSheetCombobox.SelectedIndex + 1 >= DstSheetCombobox.Items.Count)
+                return;
+
+            isLock = true;
+
+            SrcSheetCombobox.SelectedIndex = SrcSheetCombobox.SelectedIndex + 1;
+            diffConfig.SrcSheetIndex = SrcSheetCombobox.SelectedIndex;
+            DstSheetCombobox.SelectedIndex = DstSheetCombobox.SelectedIndex + 1;
+            diffConfig.DstSheetIndex = DstSheetCombobox.SelectedIndex;
+
+            ExecuteDiff();
+
+            isLock = false;
+        }
+
+        private void ShowPrevSheetDiff()
+        {
+            if (isLock)
+                return;
+
+            if (SrcSheetCombobox.SelectedIndex - 1 < 0 ||
+                DstSheetCombobox.SelectedIndex - 1 < 0)
+                return;
+
+            isLock = true;
+
+            SrcSheetCombobox.SelectedIndex = SrcSheetCombobox.SelectedIndex - 1;
+            diffConfig.SrcSheetIndex = SrcSheetCombobox.SelectedIndex;
+            DstSheetCombobox.SelectedIndex = DstSheetCombobox.SelectedIndex - 1;
+            diffConfig.DstSheetIndex = DstSheetCombobox.SelectedIndex;
+
+            ExecuteDiff();
+
+            isLock = false;
         }
 
         private void DiffByHeaderSrc_Click(object sender, RoutedEventArgs e)
@@ -1374,6 +1500,24 @@ namespace ExcelMerge.GUI.Views
                         if (Keyboard.IsKeyDown(Key.LeftCtrl))
                         {
                             ShowLog();
+                            e.Handled = true;
+                        }
+                    }
+                    break;
+                case Key.PageDown:
+                    {
+                        if (Keyboard.IsKeyDown(Key.LeftCtrl))
+                        {
+                            ShowNextSheetDiff();
+                            e.Handled = true;
+                        }
+                    }
+                    break;
+                case Key.PageUp:
+                    {
+                        if (Keyboard.IsKeyDown(Key.LeftCtrl))
+                        {
+                            ShowPrevSheetDiff();
                             e.Handled = true;
                         }
                     }

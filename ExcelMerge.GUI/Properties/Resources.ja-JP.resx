@@ -120,6 +120,24 @@
   <data name="Button_ExtractDiff" xml:space="preserve">
     <value>差分抽出</value>
   </data>
+  <data name="Button_Swap" xml:space="preserve">
+    <value>入れ替え</value>
+  </data>
+  <data name="Button_PrevSheet" xml:space="preserve">
+    <value>前のシート</value>
+  </data>
+  <data name="Button_NextSheet" xml:space="preserve">
+    <value>次のシート</value>
+  </data>
+  <data name="ToolTip_ExtractDiff" xml:space="preserve">
+    <value>差分を抽出</value>
+  </data>
+  <data name="ToolTip_PrevSheet" xml:space="preserve">
+    <value>前のシートの差分を抽出して表示 (Ctrl + PageUp)</value>
+  </data>
+  <data name="ToolTip_NextSheet" xml:space="preserve">
+    <value>次のシートの差分を抽出して表示 (Ctrl + PageDown)</value>
+  </data>
   <data name="Label_SkipFirstBlankRows" xml:space="preserve">
     <value>先頭の空行を無視する</value>
   </data>
