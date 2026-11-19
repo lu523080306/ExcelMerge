@@ -81,8 +81,10 @@ namespace ExcelMerge.GUI
 
                 if (showDialog)
                 {
-                    var message = $"Execute external command ? \n\n------------------------------------\n {exception.Message}\n{exception.StackTrace}";
-                    var result = MessageBox.Show(message, "An error occurred.", MessageBoxButton.YesNo);
+                    // 不要把完整堆栈塞进 MessageBox：文本过长会把弹窗撑满全屏，
+                    // 按钮被挤出屏幕且难以拖动。详细堆栈仅用于日志/调试，此处只展示摘要。
+                    var message = $"程序遇到未处理的错误，即将关闭。\n\n{exception.Message}\n\n是否继续执行外部命令？";
+                    var result = MessageBox.Show(message, "程序错误", MessageBoxButton.YesNo, MessageBoxImage.Error);
                     executeExternalCommand = result == MessageBoxResult.Yes;
                 }
 

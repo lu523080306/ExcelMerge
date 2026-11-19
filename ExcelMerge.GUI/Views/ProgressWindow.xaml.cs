@@ -28,28 +28,38 @@ namespace ExcelMerge.GUI.Views
         public static void DoWorkWithModal(Action<IProgress<string>> work)
         {
             var window = new ProgressWindow();
+            Exception error = null;
 
             window.Loaded += (_, args) =>
             {
                 var worker = new BackgroundWorker();
                 var progress = new Progress<string>(data => window.Message.Content = data);
 
-                worker.DoWork += (s, workerArgs) => work(progress);
+                // 在后台线程内捕获异常，避免它冒泡到 Dispatcher/AppDomain 级未处理异常；
+                // 这样调用方可以在 UI 线程上弹出“文件被占用”之类的友好重试框。
+                worker.DoWork += (s, workerArgs) =>
+                {
+                    try
+                    {
+                        work(progress);
+                    }
+                    catch (Exception ex)
+                    {
+                        error = ex;
+                    }
+                };
                 worker.RunWorkerCompleted += (s, workerArgs) =>
                 {
-                    // BackgroundWorker 不会向外抛异常，异常被吞到 workerArgs.Error。
-                    // 必须原样重抛（保留原始堆栈），否则 ReadWorkbooks 等调用方
-                    // 拿到 null 对象，最终弹的是误导性的 NullReferenceException。
-                    if (workerArgs.Error != null)
-                        System.Runtime.ExceptionServices.ExceptionDispatchInfo
-                            .Capture(workerArgs.Error).Throw();
-
                     window.Close();
                 };
                 worker.RunWorkerAsync();
             };
 
             window.ShowDialog();
+
+            // 原样抛出（保留原始堆栈），交给调用方处理
+            if (error != null)
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
         }
     }
 }

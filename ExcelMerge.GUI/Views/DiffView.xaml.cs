@@ -793,23 +793,81 @@ namespace ExcelMerge.GUI.Views
 
         private Tuple<ExcelWorkbook, ExcelWorkbook> ReadWorkbooks()
         {
-            ExcelWorkbook swb = null;
-            ExcelWorkbook dwb = null;
             var srcPath = SrcPathTextBox.Text;
             var dstPath = DstPathTextBox.Text;
-            ProgressWindow.DoWorkWithModal(progress =>
+
+            while (true)
             {
-                progress.Report(Properties.Resources.Msg_ReadingFiles);
+                try
+                {
+                    ExcelWorkbook swb = null;
+                    ExcelWorkbook dwb = null;
+                    ProgressWindow.DoWorkWithModal(progress =>
+                    {
+                        progress.Report(Properties.Resources.Msg_ReadingFiles);
 
-                var config = CreateReadConfig();
-                swb = ExcelWorkbook.Create(srcPath, config);
-                dwb = ExcelWorkbook.Create(dstPath, config);
-            });
+                        var config = CreateReadConfig();
+                        swb = ExcelWorkbook.Create(srcPath, config);
+                        dwb = ExcelWorkbook.Create(dstPath, config);
+                    });
 
-            if (swb == null || dwb == null)
-                throw new System.IO.IOException(Properties.Resources.Msg_ReadFileFailed);
+                    if (swb == null || dwb == null)
+                        throw new System.IO.IOException(Properties.Resources.Msg_ReadFileFailed);
 
-            return Tuple.Create(swb, dwb);
+                    return Tuple.Create(swb, dwb);
+                }
+                catch (Exception ex)
+                {
+                    var owner = Window.GetWindow(this);
+
+                    // 文件被其他程序（WPS/Excel）占用：给出可重试的紧凑提示，而不是
+                    // 让异常冒泡到全局处理器、把整段堆栈塞进会铺满全屏的 MessageBox。
+                    var lockedPath = IsFileLocked(srcPath) ? srcPath
+                        : (IsFileLocked(dstPath) ? dstPath : null);
+
+                    if (lockedPath != null)
+                    {
+                        var retry = MessageDialog.ShowRetry(owner, "文件被占用",
+                            "无法读取文件：它正在被其他程序（如 WPS / Excel）打开。\n\n" +
+                            "请先关闭该文件，再点击「重试」。\n\n文件：\n" + lockedPath,
+                            ex.Message);
+
+                        if (retry)
+                            continue;
+
+                        throw new OperationCanceledException();
+                    }
+
+                    MessageDialog.ShowInfo(owner, "读取文件失败",
+                        "读取文件失败。请确认文件格式正确、未被其他程序占用。\n\n" + ex.Message,
+                        ex.ToString());
+
+                    throw new OperationCanceledException();
+                }
+            }
+        }
+
+        /// <summary>文件是否被其他程序独占（读取失败时用于区分“被占用”和“格式错误”）。</summary>
+        private static bool IsFileLocked(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                return false;
+
+            try
+            {
+                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+                {
+                    return false;
+                }
+            }
+            catch (IOException)
+            {
+                return true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
         }
 
         private Tuple<FileSetting, FileSetting> FindFileSettings(bool isStartup)
@@ -854,9 +912,29 @@ namespace ExcelMerge.GUI.Views
 
             if (diff == null)
             {
-                var workbooks = ReadWorkbooks();
+                Tuple<ExcelWorkbook, ExcelWorkbook> workbooks;
+                try
+                {
+                    workbooks = ReadWorkbooks();
+                }
+                catch (OperationCanceledException)
+                {
+                    // 用户选择取消（文件被占用/读取失败）：留在当前界面，等用户处理后再对比
+                    return;
+                }
+
                 var srcWorkbook = workbooks.Item1;
                 var dstWorkbook = workbooks.Item2;
+
+                // 启动时若文件被占用，构造阶段的 sheet 列表会是空的；读取成功后补回
+                GetViewModel().EnsureSheetNames(
+                    srcWorkbook.Sheets.Keys.ToList(),
+                    dstWorkbook.Sheets.Keys.ToList());
+
+                if (SrcSheetCombobox.SelectedIndex < 0 && GetViewModel().SrcSheetNames.Count > 0)
+                    SrcSheetCombobox.SelectedIndex = 0;
+                if (DstSheetCombobox.SelectedIndex < 0 && GetViewModel().DstSheetNames.Count > 0)
+                    DstSheetCombobox.SelectedIndex = 0;
 
                 var fileSettings = FindFileSettings(isStartup);
                 srcFileSetting = fileSettings.Item1;

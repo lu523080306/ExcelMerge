@@ -284,6 +284,27 @@ namespace ExcelMerge.GUI.ViewModels
             e.Handled = true;
         }
 
+        /// <summary>
+        /// 由 ReadWorkbooks 成功后回填 sheet 列表。
+        /// 启动时文件被占用会导致构造阶段的 sheet 探测失败、列表为空。
+        /// </summary>
+        public void EnsureSheetNames(IEnumerable<string> srcNames, IEnumerable<string> dstNames)
+        {
+            if (SrcSheetNames == null || SrcSheetNames.Count == 0)
+            {
+                SrcSheetNames = srcNames.ToList();
+                if (SelectedSrcSheetIndex < 0 && SrcSheetNames.Count > 0)
+                    SelectedSrcSheetIndex = 0;
+            }
+
+            if (DstSheetNames == null || DstSheetNames.Count == 0)
+            {
+                DstSheetNames = dstNames.ToList();
+                if (SelectedDstSheetIndex < 0 && DstSheetNames.Count > 0)
+                    SelectedDstSheetIndex = 0;
+            }
+        }
+
         private void UpdateExecutableFlag()
         {
             var existsSrc = File.Exists(SrcPath);
@@ -291,8 +312,19 @@ namespace ExcelMerge.GUI.ViewModels
 
             if (existsSrc)
             {
-                SrcSheetNames = ExcelWorkbook.GetSheetNames(SrcPath).ToList();
-                SelectedSrcSheetIndex = 0;
+                try
+                {
+                    SrcSheetNames = ExcelWorkbook.GetSheetNames(SrcPath).ToList();
+                }
+                catch (Exception)
+                {
+                    // 文件可能正被 WPS/Excel 占用。这里不能抛：此调用发生在主窗口
+                    // Show() 之前，异常会让程序直接退出且没有任何提示。
+                    // 真正的读取失败由 ReadWorkbooks 的“文件被占用/重试”弹窗处理。
+                    SrcSheetNames = new List<string>();
+                }
+
+                SelectedSrcSheetIndex = SrcSheetNames.Count > 0 ? 0 : -1;
             }
             else
             {
@@ -302,8 +334,16 @@ namespace ExcelMerge.GUI.ViewModels
 
             if (existsDst)
             {
-                DstSheetNames = ExcelWorkbook.GetSheetNames(DstPath).ToList();
-                SelectedDstSheetIndex = 0;
+                try
+                {
+                    DstSheetNames = ExcelWorkbook.GetSheetNames(DstPath).ToList();
+                }
+                catch (Exception)
+                {
+                    DstSheetNames = new List<string>();
+                }
+
+                SelectedDstSheetIndex = DstSheetNames.Count > 0 ? 0 : -1;
             }
             else
             {
