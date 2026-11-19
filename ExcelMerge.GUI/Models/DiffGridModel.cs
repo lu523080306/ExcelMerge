@@ -487,15 +487,26 @@ namespace ExcelMerge.GUI.Models
 
         private bool IsMatch(ExcelCellDiff cell, string text, bool exactMatch, bool caseSensitive, bool useRegex)
         {
+            if (useRegex)
+            {
+                // 正则要保留原文大小写语义，大小写不敏感交给 RegexOptions，
+                // 不能先 ToUpper（那会破坏 [a-z]、\w、锚点等正则语义）
+                try
+                {
+                    var options = caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
+                    var regex = new Regex(text, options);
+                    return regex.IsMatch(cell.SrcCell.Value) || regex.IsMatch(cell.DstCell.Value);
+                }
+                catch (ArgumentException)
+                {
+                    // 用户输入了非法正则（如未闭合的 "["），视为不匹配而不是崩溃
+                    return false;
+                }
+            }
+
             var srcValue = caseSensitive ? cell.SrcCell.Value : cell.SrcCell.Value.ToUpper();
             var dstValue = caseSensitive ? cell.DstCell.Value : cell.DstCell.Value.ToUpper();
             var target = caseSensitive ? text : text.ToUpper();
-
-            if (useRegex)
-            {
-                var regex = new Regex(target);
-                return regex.IsMatch(srcValue) || regex.IsMatch(srcValue);
-            }
 
             if (exactMatch)
                 return target == srcValue || target == dstValue;
