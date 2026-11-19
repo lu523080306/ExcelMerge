@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace ExcelMerge
 {
@@ -36,15 +37,18 @@ namespace ExcelMerge
     }
 
     /// <summary>
-    /// 把 ExcelSheetDiff 的差异应用到目标文件（V2：值级 + 结构级行列增删）。
+    /// 把 ExcelSheetDiff 的差异应用到目标文件（值级 + 结构级行列增删）。
     ///
-    /// 算法分三步（全部作用于活模型，索引实时计算）：
-    ///   1. 列结构同步：删目标独有列、插对侧独有列（先删后插，索引在删/插当下仍有效）。
-    ///   2. 行级前向扫描：对目标侧本有的行写入"对侧值"（等值格写相同值=无操作）；
-    ///      对目标侧独有的行删除；对仅在对侧的行插入。
-    ///   3. 保存。
+    /// 坐标原则（V3）：不使用"当前目标行"游标，所有写入一律使用 diff 中记录的真实物理坐标：
+    ///   - 行：ExcelRowDiff.SrcRowIndex / DstRowIndex（读取时保留物理行号，空行/Null 行也算真实存在）
+    ///   - 列：对齐列 → 目标物理列的静态映射（列结构增删后重新计算）
     ///
-    /// 已知前提：行结构应用假设目标行连续（配置表典型形态）；NPOI 列搬移不处理合并单元格与公式引用改写。
+    /// 执行顺序（保证物理坐标在结构变更前有效）：
+    ///   1. 列结构：删目标独有列（降序）、插对侧独有列（升序）
+    ///   2. 行值：只写两侧都存在的行，按目标物理行号直接落值
+    ///   3. 行结构：删目标独有行、插对侧独有行（按目标物理位置降序，插入锚点=下一个目标存在行）
+    ///
+    /// 已知局限：NPOI 列搬移不处理合并单元格/公式引用改写；插入行不继承样式。
     /// </summary>
     public class ExcelDiffApplier
     {
@@ -57,22 +61,17 @@ namespace ExcelMerge
             {
                 using (var target = ExcelWriteTarget.Create(targetFilePath, targetSheetName))
                 {
-                    var status = diff.ColumnStatusMap;
-                    var alignedCount = status == null || status.Count == 0
-                        ? GetAlignedColumnCount(diff)
-                        : status.Count;
+                    var srcToDst = direction == ExcelDiffDirection.SrcToDst;
 
-                    // 目标侧要移除的列状态：让 dst 对齐 src 时移除 Inserted(仅dst)；反向移除 Deleted(仅src)
-                    var removeStatus = direction == ExcelDiffDirection.SrcToDst
-                        ? ExcelColumnStatus.Inserted
-                        : ExcelColumnStatus.Deleted;
+                    // 全量：所有结构列都同步
+                    var plan = BuildColumnPlan(diff, srcToDst, null, true, null);
+                    ExecuteColumnOps(target, plan, result);
 
-                    int[] delBefore; int[] insBefore; int[] finalCol;
-                    BuildColumnMaps(status, alignedCount, removeStatus, out delBefore, out insBefore, out finalCol);
+                    // 值：只写两侧都存在的行（物理行号在行结构变更前有效）
+                    WriteValues(target, diff, srcToDst, plan, null, result);
 
-                    SyncColumns(target, status, alignedCount, direction, delBefore, insBefore, finalCol, result);
-
-                    SyncRowsAndValues(target, diff, direction, finalCol, result);
+                    // 行结构：全部目标独有行删除 / 对侧独有行插入
+                    ExecuteRowOps(target, diff, srcToDst, null, plan, result);
 
                     target.Save();
 
@@ -123,8 +122,9 @@ namespace ExcelMerge
 
         /// <summary>
         /// 只应用选中的 diff 行（"同步一行"模式）：结构行(Added/Removed)做插入/删除，普通行做整行值回写。
-        /// 未选中的行跳过（保持目标现状），游标仍完整走查，保证被选行的坐标对齐。
-        /// 不做列结构同步；列位置按最终对齐布局映射。
+        /// 未选中的行完全不动；值按目标物理行号写入，行结构按物理位置降序执行。
+        /// 目标缺少的列（对侧独有列）若在选中行里有值，会先补插该列，
+        /// 否则插入行时这一列的值会被丢掉。
         /// </summary>
         public ExcelApplyResult ApplyRows(
             ExcelSheetDiff diff, string targetFilePath, string targetSheetName,
@@ -136,62 +136,16 @@ namespace ExcelMerge
             {
                 using (var target = ExcelWriteTarget.Create(targetFilePath, targetSheetName))
                 {
-                    var selected = new HashSet<int>(diffRowIndexes ?? new int[0]);
-                    var alignedCount = GetAlignedColumnCount(diff);
-                    var removeStatus = direction == ExcelDiffDirection.SrcToDst
-                        ? ExcelColumnStatus.Inserted
-                        : ExcelColumnStatus.Deleted;
-
-                    int[] delBefore; int[] insBefore; int[] finalCol;
-                    BuildColumnMaps(diff.ColumnStatusMap, alignedCount, removeStatus, out delBefore, out insBefore, out finalCol);
-
                     var srcToDst = direction == ExcelDiffDirection.SrcToDst;
-                    var cur = 0;
+                    var selected = new HashSet<int>(diffRowIndexes ?? new int[0]);
 
-                    foreach (var pair in diff.Rows)
-                    {
-                        var row = pair.Value;
-                        var isSelected = selected.Contains(pair.Key);
-                        var hasCells = row.Cells.Count > 0;
-                        var isSrcOnly = hasCells && row.IsRemoved();
-                        var isDstOnly = hasCells && row.IsAdded();
+                    // 选中行里出现的“目标缺失列”必须先补插，否则整行同步会丢掉这些格
+                    var insertColumns = GetInsertColumnsForSelectedRows(diff, srcToDst, selected);
+                    var plan = BuildColumnPlan(diff, srcToDst, null, insertColumns.Count > 0, insertColumns);
 
-                        if (srcToDst)
-                        {
-                            if (isSrcOnly)
-                            {
-                                if (isSelected) { target.InsertRow(cur, BuildRowValues(row, true, finalCol)); result.InsertedRowCount++; cur++; }
-                                // 未选中：目标里本无此行，游标不动
-                            }
-                            else if (isDstOnly)
-                            {
-                                if (isSelected) { target.DeleteRow(cur); result.DeletedRowCount++; }
-                                else cur++;   // 未选中：行保留在目标里，占一个位置
-                            }
-                            else
-                            {
-                                if (isSelected) WriteRowValues(target, row, cur, true, finalCol, result);
-                                cur++;
-                            }
-                        }
-                        else
-                        {
-                            if (isDstOnly)
-                            {
-                                if (isSelected) { target.InsertRow(cur, BuildRowValues(row, false, finalCol)); result.InsertedRowCount++; cur++; }
-                            }
-                            else if (isSrcOnly)
-                            {
-                                if (isSelected) { target.DeleteRow(cur); result.DeletedRowCount++; }
-                                else cur++;   // 未选中：行保留在目标源文件里
-                            }
-                            else
-                            {
-                                if (isSelected) WriteRowValues(target, row, cur, false, finalCol, result);
-                                cur++;
-                            }
-                        }
-                    }
+                    ExecuteColumnOps(target, plan, result);
+                    WriteValues(target, diff, srcToDst, plan, selected, result);
+                    ExecuteRowOps(target, diff, srcToDst, selected, plan, result);
 
                     target.Save();
 
@@ -211,9 +165,11 @@ namespace ExcelMerge
 
         /// <summary>
         /// 只同步选中的对齐列（"同步一列"模式）：
-        ///   结构列(对侧独有/目标独有) → 对该列做插入/删除；
-        ///   值列 → 沿行游标把该列在每个目标行的值从对侧写回。
-        /// 不做行结构同步；先结构列(删降/插升)再值列，保证布局自洽。
+        ///   结构列(对侧独有/目标独有) → 只对选中列做插入/删除；
+        ///   值列 → 对每一行按目标物理行号把选中列的值从对侧写回。
+        /// 不删除/重排目标独有行；但本批插入结构列时，对侧独有行会补插一行（只写选中列），
+        /// 否则这些行的新增列永远为空。
+        /// 列位置按"本批实际执行的列增删"重新计算。
         /// </summary>
         public ExcelApplyResult ApplyColumns(
             ExcelSheetDiff diff, string targetFilePath, string targetSheetName,
@@ -225,87 +181,19 @@ namespace ExcelMerge
             {
                 using (var target = ExcelWriteTarget.Create(targetFilePath, targetSheetName))
                 {
-                    var selected = new HashSet<int>(alignedColumns ?? new int[0]);
-                    var alignedCount = GetAlignedColumnCount(diff);
                     var srcToDst = direction == ExcelDiffDirection.SrcToDst;
-                    var removeStatus = srcToDst ? ExcelColumnStatus.Inserted : ExcelColumnStatus.Deleted;
+                    var selected = new HashSet<int>(alignedColumns ?? new int[0]);
 
-                    int[] delBefore; int[] insBefore; int[] finalCol;
-                    BuildColumnMaps(diff.ColumnStatusMap, alignedCount, removeStatus, out delBefore, out insBefore, out finalCol);
-                    var colStatus = diff.ColumnStatusMap;
+                    var plan = BuildColumnPlan(diff, srcToDst, selected, true, selected);
+                    ExecuteColumnOps(target, plan, result);
 
-                    // 1) 结构列：删目标独有列(降序)，插对侧独有列(升序)——只对选中列
-                    for (int c = alignedCount - 1; c >= 0; c--)
-                    {
-                        if (!selected.Contains(c))
-                            continue;
+                    // 值：所有两侧都存在的行，只写选中列（WriteCol 已按选中集合过滤）
+                    WriteValues(target, diff, srcToDst, plan, null, result);
 
-                        var s = colStatus != null && colStatus.ContainsKey(c) ? colStatus[c] : ExcelColumnStatus.None;
-                        var isTargetOnly = srcToDst ? s == ExcelColumnStatus.Inserted : s == ExcelColumnStatus.Deleted;
-                        if (!isTargetOnly)
-                            continue;
-
-                        var originIndex = srcToDst ? c - delBefore[c] : c - insBefore[c];
-                        target.DeleteColumn(originIndex);
-                        result.DeletedColumnCount++;
-                    }
-
-                    var otherOnly = srcToDst ? ExcelColumnStatus.Deleted : ExcelColumnStatus.Inserted;
-                    for (int c = 0; c < alignedCount; c++)
-                    {
-                        if (!selected.Contains(c))
-                            continue;
-
-                        var s = colStatus != null && colStatus.ContainsKey(c) ? colStatus[c] : ExcelColumnStatus.None;
-                        if (s != otherOnly)
-                            continue;
-
-                        target.InsertColumn(finalCol[c]);
-                        result.InsertedColumnCount++;
-                    }
-
-                    // 2) 值列：沿行游标，对目标本有的每一行，把选中列的值从对侧写回
-                    var cur = 0;
-                    foreach (var pair in diff.Rows)
-                    {
-                        var row = pair.Value;
-                        var hasCells = row.Cells.Count > 0;
-                        var isSrcOnly = hasCells && row.IsRemoved();
-                        var isDstOnly = hasCells && row.IsAdded();
-
-                        if (srcToDst)
-                        {
-                            if (isSrcOnly)
-                            {
-                                // 目标无此行，游标不动
-                            }
-                            else if (isDstOnly)
-                            {
-                                cur++;   // 目标本有，未做行同步 → 保留占位
-                            }
-                            else
-                            {
-                                WriteSelectedColumnValues(target, row, cur, true, finalCol, selected, result);
-                                cur++;
-                            }
-                        }
-                        else
-                        {
-                            if (isDstOnly)
-                            {
-                                // 目标(src)无此行，游标不动
-                            }
-                            else if (isSrcOnly)
-                            {
-                                cur++;   // 目标本有，保留占位
-                            }
-                            else
-                            {
-                                WriteSelectedColumnValues(target, row, cur, false, finalCol, selected, result);
-                                cur++;
-                            }
-                        }
-                    }
+                    // 源侧独有行在目标里没有落点：补插整行（共享列 + 本批插入的结构列），
+                    // 否则这些行的选中列/新增列永远为空。注意不能只在“插入结构列”时执行，
+                    // 否则行同步建过列之后再同步列，缺失行又会被跳过。
+                    AlignRowsForColumnSync(target, diff, srcToDst, plan, result);
 
                     target.Save();
 
@@ -323,26 +211,325 @@ namespace ExcelMerge
             }
         }
 
-        private static void WriteSelectedColumnValues(
-            ExcelWriteTarget target, ExcelRowDiff row, int targetRow,
-            bool fromSrc, int[] finalCol, HashSet<int> selected, ExcelApplyResult result)
+        /// <summary>写值：只写两侧都存在的行；selected 非 null 时只写选中的 diff 行。</summary>
+        private static void WriteValues(
+            ExcelWriteTarget target, ExcelSheetDiff diff, bool srcToDst,
+            ColumnPlan plan, HashSet<int> selectedRows, ExcelApplyResult result)
         {
-            foreach (var c in selected)
+            foreach (var pair in diff.Rows)
             {
-                if (finalCol[c] < 0)
+                if (selectedRows != null && !selectedRows.Contains(pair.Key))
                     continue;
 
-                ExcelCellDiff cell;
-                if (!row.Cells.TryGetValue(c, out cell))
+                var row = pair.Value;
+
+                // 行值只存在于目标侧的行没有源值可写；只存在于源侧的行目标没有落点
+                if (!row.ExistsInSrc || !row.ExistsInDst)
                     continue;
 
-                // 只写有差异的格：None(等值)格改写会制造幽灵物理格
-                if (cell.Status == ExcelCellStatus.None)
-                    continue;
+                var targetRow = srcToDst ? row.DstRowIndex.Value : row.SrcRowIndex.Value;
 
-                target.SetCellValue(targetRow, finalCol[c], fromSrc ? cell.SrcCell.Value : cell.DstCell.Value);
-                result.AppliedCellCount++;
+                foreach (var cellPair in row.Cells)
+                {
+                    var cell = cellPair.Value;
+
+                    // 只写真正有差异的格：None(等值)格重写只会把目标文件
+                    // 空格写成物理格子/撑宽行，重读时列对齐会把它判成幽灵差异。
+                    if (cell.Status == ExcelCellStatus.None)
+                        continue;
+
+                    var col = plan.WriteCol[cellPair.Key];
+                    if (col < 0)
+                        continue;
+
+                    target.SetCellValue(targetRow, col, srcToDst ? cell.SrcCell.Value : cell.DstCell.Value);
+                    result.AppliedCellCount++;
+                }
             }
+        }
+
+        /// <summary>
+        /// 列同步时的行对齐（仅在插入结构列时执行）：
+        ///   对侧独有行在目标里没有落点，但新增的结构列必须覆盖这些行，
+        ///   因此在会话空档（上一个目标行之后、下一个目标行之前）插入一行，只写选中列的值。
+        ///   目标独有行保持不动。
+        /// </summary>
+        private static void AlignRowsForColumnSync(
+            ExcelWriteTarget target, ExcelSheetDiff diff, bool srcToDst, ColumnPlan plan, ExcelApplyResult result)
+        {
+            var ops = new List<RowOp>();
+            var wants = new List<ExcelRowDiff>();
+            var gapAnchor = 0;
+
+            foreach (var pair in diff.Rows)
+            {
+                var row = pair.Value;
+                var inTarget = ExistsInTarget(row, srcToDst);
+                var inOther = ExistsInOther(row, srcToDst);
+
+                if (inTarget && inOther)
+                {
+                    FlushColumnGap(wants, gapAnchor, plan, srcToDst, ops);
+                    gapAnchor = TargetRow(row, srcToDst) + 1;
+                }
+                else if (inTarget)
+                {
+                    // 目标独有行占位：插入锚点移到它后面
+                    var physical = TargetRow(row, srcToDst);
+                    if (physical + 1 > gapAnchor)
+                        gapAnchor = physical + 1;
+                }
+                else if (inOther)
+                {
+                    wants.Add(row);
+                }
+            }
+
+            FlushColumnGap(wants, gapAnchor, plan, srcToDst, ops);
+
+            ops.Sort((a, b) =>
+            {
+                var cmp = b.Key.CompareTo(a.Key);
+                if (cmp != 0)
+                    return cmp;
+
+                return b.Seq.CompareTo(a.Seq);
+            });
+
+            foreach (var op in ops)
+            {
+                target.InsertRow(op.Key, op.Values);
+                result.InsertedRowCount++;
+            }
+        }
+
+        /// <summary>把空档里对侧独有行插到锚点位置（同锚点多行按对齐顺序逆序执行）。</summary>
+        private static void FlushColumnGap(
+            List<ExcelRowDiff> wants, int gapAnchor, ColumnPlan plan, bool srcToDst,
+            List<RowOp> ops)
+        {
+            foreach (var want in wants)
+            {
+                // 整行带值：目标缺失的行没有可覆盖的数据，整行插入不会破坏任何东西，
+                // 还能避免“只填选中列、其他列留空”的行内空格。
+                var values = BuildInsertValues(want, srcToDst, plan);
+                if (!values.Any(v => !string.IsNullOrEmpty(v)))
+                    continue;
+
+                ops.Add(new RowOp
+                {
+                    Key = gapAnchor,
+                    IsDelete = false,
+                    Seq = want.Index,
+                    Values = values,
+                });
+            }
+
+            wants.Clear();
+        }
+
+        private static void ExecuteColumnOps(ExcelWriteTarget target, ColumnPlan plan, ExcelApplyResult result)
+        {
+            var deletes = new List<ColumnOp>();
+            var inserts = new List<ColumnOp>();
+            foreach (var op in plan.Ops)
+            {
+                if (op.IsDelete) deletes.Add(op);
+                else inserts.Add(op);
+            }
+
+            // 删除按操作前物理列降序：只影响更大的列号
+            deletes.Sort((a, b) => b.PhysicalIndex.CompareTo(a.PhysicalIndex));
+            // 插入按操作后物理列升序：位置已是最终布局
+            inserts.Sort((a, b) => a.FinalIndex.CompareTo(b.FinalIndex));
+
+            foreach (var op in deletes)
+            {
+                target.DeleteColumn(op.PhysicalIndex);
+                result.DeletedColumnCount++;
+            }
+
+            foreach (var op in inserts)
+            {
+                target.InsertColumn(op.FinalIndex);
+                result.InsertedColumnCount++;
+            }
+        }
+
+        private static void ExecuteRowOps(
+            ExcelWriteTarget target, ExcelSheetDiff diff, bool srcToDst,
+            HashSet<int> selected, ColumnPlan plan, ExcelApplyResult result)
+        {
+            var ops = BuildRowOps(diff, srcToDst, selected, plan);
+            foreach (var op in ops)
+            {
+                if (op.IsDelete)
+                {
+                    target.DeleteRow(op.Key);
+                    result.DeletedRowCount++;
+                }
+                else
+                {
+                    target.InsertRow(op.Key, op.Values);
+                    result.InsertedRowCount++;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 行结构操作单：按目标物理行号降序执行。
+        /// 同一位置：先删后插；同一锚点的多行插入按对齐顺序逆序，保证源顺序。
+        /// </summary>
+        private static List<RowOp> BuildRowOps(
+            ExcelSheetDiff diff, bool srcToDst, HashSet<int> selected, ColumnPlan plan)
+        {
+            var ops = new List<RowOp>();
+
+            var maxTargetRow = -1;
+            foreach (var pair in diff.Rows)
+            {
+                if (!ExistsInTarget(pair.Value, srcToDst))
+                    continue;
+
+                var physical = TargetRow(pair.Value, srcToDst);
+                if (physical > maxTargetRow)
+                    maxTargetRow = physical;
+            }
+
+            var appendAnchor = maxTargetRow + 1;
+
+            // 逆序找插入锚点：下一个"目标侧存在"的行
+            var keys = new List<int>(diff.Rows.Keys);
+            int? nextTargetRow = null;
+            for (var i = keys.Count - 1; i >= 0; i--)
+            {
+                var key = keys[i];
+                var row = diff.Rows[key];
+
+                if (ExistsInTarget(row, srcToDst))
+                {
+                    nextTargetRow = TargetRow(row, srcToDst);
+                    continue;
+                }
+
+                if (!ExistsInOther(row, srcToDst))
+                    continue;
+
+                if (selected != null && !selected.Contains(key))
+                    continue;
+
+                ops.Add(new RowOp
+                {
+                    Key = nextTargetRow ?? appendAnchor,
+                    IsDelete = false,
+                    Seq = key,
+                    Values = BuildInsertValues(row, srcToDst, plan),
+                });
+            }
+
+            // 删除：目标侧独有
+            foreach (var pair in diff.Rows)
+            {
+                var row = pair.Value;
+                if (!ExistsInTarget(row, srcToDst) || ExistsInOther(row, srcToDst))
+                    continue;
+
+                if (selected != null && !selected.Contains(pair.Key))
+                    continue;
+
+                ops.Add(new RowOp
+                {
+                    Key = TargetRow(row, srcToDst),
+                    IsDelete = true,
+                    Seq = pair.Key,
+                });
+            }
+
+            ops.Sort((a, b) =>
+            {
+                var cmp = b.Key.CompareTo(a.Key);
+                if (cmp != 0)
+                    return cmp;
+
+                if (a.IsDelete != b.IsDelete)
+                    return a.IsDelete ? -1 : 1;
+
+                return b.Seq.CompareTo(a.Seq);
+            });
+
+            return ops;
+        }
+
+        /// <summary>插入行的值数组：下标为目标物理列（操作后布局）。</summary>
+        private static string[] BuildInsertValues(ExcelRowDiff row, bool srcToDst, ColumnPlan plan)
+        {
+            var values = new string[plan.Count < 0 ? 0 : plan.Count];
+            for (var i = 0; i < values.Length; i++)
+                values[i] = string.Empty;
+
+            foreach (var pair in row.Cells)
+            {
+                var col = plan.PostOpCol[pair.Key];
+                if (col < 0 || col >= values.Length)
+                    continue;
+
+                var cell = pair.Value;
+                values[col] = srcToDst ? cell.SrcCell.Value : cell.DstCell.Value;
+            }
+
+            return values;
+        }
+
+        private static bool ExistsInTarget(ExcelRowDiff row, bool srcToDst)
+        {
+            return srcToDst ? row.ExistsInDst : row.ExistsInSrc;
+        }
+
+        private static bool ExistsInOther(ExcelRowDiff row, bool srcToDst)
+        {
+            return srcToDst ? row.ExistsInSrc : row.ExistsInDst;
+        }
+
+        private static int TargetRow(ExcelRowDiff row, bool srcToDst)
+        {
+            return (srcToDst ? row.DstRowIndex : row.SrcRowIndex).Value;
+        }
+
+        /// <summary>
+        /// 选中行里，目标不存在的列（对侧独有）且该行有值的列。
+        /// 行同步时先补插这些列，插入行的这些格才有落点。
+        /// </summary>
+        private static HashSet<int> GetInsertColumnsForSelectedRows(
+            ExcelSheetDiff diff, bool srcToDst, HashSet<int> selected)
+        {
+            var needed = new HashSet<int>();
+            var status = diff.ColumnStatusMap;
+
+            foreach (var pair in diff.Rows)
+            {
+                if (!selected.Contains(pair.Key))
+                    continue;
+
+                foreach (var cellPair in pair.Value.Cells)
+                {
+                    var c = cellPair.Key;
+                    var s = status != null && status.ContainsKey(c) ? status[c] : ExcelColumnStatus.None;
+
+                    // 对侧独有：srcToDst 时是 Deleted；反向时是 Inserted
+                    var isOtherOnly = srcToDst
+                        ? s == ExcelColumnStatus.Deleted
+                        : s == ExcelColumnStatus.Inserted;
+                    if (!isOtherOnly)
+                        continue;
+
+                    var cell = cellPair.Value;
+                    var value = srcToDst ? cell.SrcCell.Value : cell.DstCell.Value;
+                    if (!string.IsNullOrEmpty(value))
+                        needed.Add(c);
+                }
+            }
+
+            return needed;
         }
 
         private static int GetAlignedColumnCount(ExcelSheetDiff diff)
@@ -354,158 +541,125 @@ namespace ExcelMerge
             return count;
         }
 
-        private static void BuildColumnMaps(
-            Dictionary<int, ExcelColumnStatus> status, int alignedCount, ExcelColumnStatus removeStatus,
-            out int[] delBefore, out int[] insBefore, out int[] finalCol)
+        /// <summary>
+        /// 计算目标侧"对齐列 → 物理列"的偏移。
+        /// 目标文件可能被裁剪过前导空列，物理列 = 偏移 + 对齐列 - (目标侧缺失的对齐列数)。
+        /// </summary>
+        private static int GetTargetColumnOffset(
+            ExcelSheetDiff diff, bool srcToDst, int[] delBefore, int[] insBefore)
         {
-            delBefore = new int[alignedCount + 1];
-            insBefore = new int[alignedCount + 1];
+            foreach (var pair in diff.Rows)
+            {
+                foreach (var cellPair in pair.Value.Cells)
+                {
+                    var c = cellPair.Key;
+                    var cell = cellPair.Value;
 
-            for (int c = 0; c < alignedCount; c++)
+                    if (srcToDst)
+                    {
+                        if (cell.DstCell == null || cell.DstCell.IsSynthetic)
+                            continue;
+
+                        return cell.DstCell.OriginalColumnIndex - (c - delBefore[c]);
+                    }
+
+                    if (cell.SrcCell == null || cell.SrcCell.IsSynthetic)
+                        continue;
+
+                    return cell.SrcCell.OriginalColumnIndex - (c - insBefore[c]);
+                }
+            }
+
+            return 0;
+        }
+
+        /// <summary>
+        /// 列布局规划：
+        ///   PostOpCol：结构操作后的目标物理列（-1=目标不存在）
+        ///   WriteCol：值写入的目标物理列（-1=不写）
+        ///   Ops：本批要执行的列结构操作（仅 selected 范围内的结构列）
+        /// </summary>
+        private static ColumnPlan BuildColumnPlan(
+            ExcelSheetDiff diff, bool srcToDst, HashSet<int> selected,
+            bool doStructuralOps, HashSet<int> structuralColumns)
+        {
+            var status = diff.ColumnStatusMap;
+            var alignedCount = GetAlignedColumnCount(diff);
+            if (status != null && status.Count > alignedCount)
+                alignedCount = status.Count;
+
+            var delBefore = new int[alignedCount + 1];
+            var insBefore = new int[alignedCount + 1];
+            for (var c = 0; c < alignedCount; c++)
             {
                 var s = status != null && status.ContainsKey(c) ? status[c] : ExcelColumnStatus.None;
                 delBefore[c + 1] = delBefore[c] + (s == ExcelColumnStatus.Deleted ? 1 : 0);
                 insBefore[c + 1] = insBefore[c] + (s == ExcelColumnStatus.Inserted ? 1 : 0);
             }
 
-            finalCol = new int[alignedCount];
-            for (int i = 0; i < alignedCount; i++)
-                finalCol[i] = -1;
+            var offset = GetTargetColumnOffset(diff, srcToDst, delBefore, insBefore);
 
-            var idx = 0;
-            for (int c = 0; c < alignedCount; c++)
+            var plan = new ColumnPlan();
+            plan.PostOpCol = new int[alignedCount];
+            plan.WriteCol = new int[alignedCount];
+            for (var c = 0; c < alignedCount; c++)
             {
-                var s = status != null && status.ContainsKey(c) ? status[c] : ExcelColumnStatus.None;
-                if (s != removeStatus)
-                    finalCol[c] = idx++;
-            }
-        }
-
-        /// <summary>列结构同步：先删目标独有的列（降序），再插对侧独有的列（升序，位置=最终布局）。</summary>
-        private static void SyncColumns(
-            ExcelWriteTarget target, Dictionary<int, ExcelColumnStatus> status, int alignedCount,
-            ExcelDiffDirection direction, int[] delBefore, int[] insBefore, int[] finalCol, ExcelApplyResult result)
-        {
-            var srcToDst = direction == ExcelDiffDirection.SrcToDst;
-
-            // 1) 删除目标独有的列
-            for (int c = alignedCount - 1; c >= 0; c--)
-            {
-                var s = status != null && status.ContainsKey(c) ? status[c] : ExcelColumnStatus.None;
-                var isTargetOnly = srcToDst ? s == ExcelColumnStatus.Inserted : s == ExcelColumnStatus.Deleted;
-                if (!isTargetOnly)
-                    continue;
-
-                var originIndex = srcToDst ? c - delBefore[c] : c - insBefore[c];
-                target.DeleteColumn(originIndex);
-                result.DeletedColumnCount++;
+                plan.PostOpCol[c] = -1;
+                plan.WriteCol[c] = -1;
             }
 
-            // 2) 插入对侧独有的列
-            var otherOnly = srcToDst ? ExcelColumnStatus.Deleted : ExcelColumnStatus.Inserted;
-            for (int c = 0; c < alignedCount; c++)
+            var pos = offset;
+            for (var c = 0; c < alignedCount; c++)
             {
                 var s = status != null && status.ContainsKey(c) ? status[c] : ExcelColumnStatus.None;
-                if (s != otherOnly)
-                    continue;
+                var selectedColumn = selected == null || selected.Contains(c);
+                var structuralColumn = structuralColumns == null || structuralColumns.Contains(c);
 
-                target.InsertColumn(finalCol[c]);
-                result.InsertedColumnCount++;
-            }
-        }
+                // 目标侧独有：srcToDst 时是 Inserted；反向时是 Deleted
+                var isTargetOnly = srcToDst
+                    ? s == ExcelColumnStatus.Inserted
+                    : s == ExcelColumnStatus.Deleted;
+                // 对侧独有：srcToDst 时是 Deleted；反向时是 Inserted
+                var isOtherOnly = srcToDst
+                    ? s == ExcelColumnStatus.Deleted
+                    : s == ExcelColumnStatus.Inserted;
 
-        /// <summary>行级前向扫描 + 值写入。</summary>
-        private static void SyncRowsAndValues(
-            ExcelWriteTarget target, ExcelSheetDiff diff, ExcelDiffDirection direction, int[] finalCol, ExcelApplyResult result)
-        {
-            var srcToDst = direction == ExcelDiffDirection.SrcToDst;
-            var cur = 0;
-
-            foreach (var rowPair in diff.Rows)
-            {
-                var row = rowPair.Value;
-                var hasCells = row.Cells.Count > 0;
-                var isSrcOnly = hasCells && row.IsRemoved();
-                var isDstOnly = hasCells && row.IsAdded();
-
-                if (srcToDst)
+                if (s == ExcelColumnStatus.None)
                 {
-                    if (isSrcOnly)
+                    plan.PostOpCol[c] = pos;
+                    plan.WriteCol[c] = selectedColumn ? pos : -1;
+                    pos++;
+                }
+                else if (isTargetOnly)
+                {
+                    if (doStructuralOps && structuralColumn)
                     {
-                        target.InsertRow(cur, BuildRowValues(row, true, finalCol));
-                        result.InsertedRowCount++;
-                        cur++;
-                    }
-                    else if (isDstOnly)
-                    {
-                        target.DeleteRow(cur);
-                        result.DeletedRowCount++;
+                        // 目标侧独有列 → 删除（操作前物理列）
+                        var physical = offset + c - (srcToDst ? delBefore[c] : insBefore[c]);
+                        plan.Ops.Add(new ColumnOp { IsDelete = true, PhysicalIndex = physical });
                     }
                     else
                     {
-                        WriteRowValues(target, row, cur, true, finalCol, result);
-                        cur++;
+                        // 保留但不同步值（不覆盖目标独有列）
+                        plan.PostOpCol[c] = pos;
+                        pos++;
                     }
                 }
-                else
+                else if (isOtherOnly)
                 {
-                    if (isDstOnly)
+                    if (doStructuralOps && structuralColumn)
                     {
-                        target.InsertRow(cur, BuildRowValues(row, false, finalCol));
-                        result.InsertedRowCount++;
-                        cur++;
-                    }
-                    else if (isSrcOnly)
-                    {
-                        target.DeleteRow(cur);
-                        result.DeletedRowCount++;
-                    }
-                    else
-                    {
-                        WriteRowValues(target, row, cur, false, finalCol, result);
-                        cur++;
+                        // 对侧独有列 → 在最终布局位置插入，并写入对侧值
+                        plan.PostOpCol[c] = pos;
+                        plan.WriteCol[c] = selectedColumn ? pos : -1;
+                        plan.Ops.Add(new ColumnOp { IsDelete = false, FinalIndex = pos });
+                        pos++;
                     }
                 }
             }
-        }
 
-        private static string[] BuildRowValues(ExcelRowDiff row, bool fromSrc, int[] finalCol)
-        {
-            var values = new string[finalCol.Length];
-            for (int c = 0; c < finalCol.Length; c++)
-            {
-                if (finalCol[c] < 0)
-                    continue;
-
-                ExcelCellDiff cell;
-                values[finalCol[c]] = row.Cells.TryGetValue(c, out cell)
-                    ? (fromSrc ? cell.SrcCell.Value : cell.DstCell.Value)
-                    : string.Empty;
-            }
-
-            return values;
-        }
-
-        private static void WriteRowValues(
-            ExcelWriteTarget target, ExcelRowDiff row, int targetRow, bool fromSrc, int[] finalCol, ExcelApplyResult result)
-        {
-            for (int c = 0; c < finalCol.Length; c++)
-            {
-                if (finalCol[c] < 0)
-                    continue;
-
-                ExcelCellDiff cell;
-                if (!row.Cells.TryGetValue(c, out cell))
-                    continue;
-
-                // 只写"真正需要同步"的格：None(等值)格 src==dst，重写只会把目标文件
-                // 空格写成物理格子/撑宽行，重读时列对齐会把它判成幽灵差异。
-                if (cell.Status == ExcelCellStatus.None)
-                    continue;
-
-                target.SetCellValue(targetRow, finalCol[c], fromSrc ? cell.SrcCell.Value : cell.DstCell.Value);
-                result.AppliedCellCount++;
-            }
+            plan.Count = pos;
+            return plan;
         }
 
         private static string BuildMessage(ExcelDiffDirection direction, ExcelApplyResult result)
@@ -527,6 +681,29 @@ namespace ExcelMerge
                 : "已应用: " + string.Join(", ", parts);
 
             return text + " (" + (direction == ExcelDiffDirection.SrcToDst ? "src→dst" : "dst→src") + ")";
+        }
+
+        private sealed class ColumnOp
+        {
+            public bool IsDelete;
+            public int PhysicalIndex; // 删除：操作前物理列
+            public int FinalIndex;    // 插入：操作后物理列
+        }
+
+        private sealed class ColumnPlan
+        {
+            public int[] PostOpCol;
+            public int[] WriteCol;
+            public int Count;
+            public readonly List<ColumnOp> Ops = new List<ColumnOp>();
+        }
+
+        private sealed class RowOp
+        {
+            public int Key;         // 目标物理行
+            public bool IsDelete;
+            public int Seq;         // 对齐顺序
+            public string[] Values; // 插入行值（下标=目标物理列）
         }
     }
 }

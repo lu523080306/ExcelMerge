@@ -18,7 +18,8 @@ namespace ExcelMerge
                     foreach (var c in sr.ReadLine().Split(','))
                         cells.Add(new ExcelCell(c, columnIndex++, rowIndex));
 
-                    yield return new ExcelRow(rowIndex++, cells);
+                    yield return new ExcelRow(rowIndex, rowIndex, cells);
+                    rowIndex++;
                 }
             }
         }

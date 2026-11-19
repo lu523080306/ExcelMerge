@@ -23,7 +23,7 @@ namespace ExcelMerge
                     cells.Add(new ExcelCell(stringValue, columnIndex, rowIndex));
                 }
 
-                yield return new ExcelRow(actualRowIndex++, cells);
+                yield return new ExcelRow(actualRowIndex++, rowIndex, cells);
             }
         }
     }

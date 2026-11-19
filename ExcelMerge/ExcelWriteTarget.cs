@@ -170,8 +170,10 @@ namespace ExcelMerge
             if (npoiRow != null)
                 sheet.RemoveRow(npoiRow);
 
-            if (rowIndex <= sheet.LastRowNum)
-                sheet.ShiftRows(rowIndex, sheet.LastRowNum, -1);
+            // NPOI 2.3.0：RemoveRow(i) 后必须从 i+1 开始上移。
+            // 若从 i 开始，ShiftRows 会把上一行整行置空（会把值写丢）。
+            if (rowIndex + 1 <= sheet.LastRowNum)
+                sheet.ShiftRows(rowIndex + 1, sheet.LastRowNum, -1);
         }
 
         public override void InsertColumn(int columnIndex)
@@ -302,7 +304,7 @@ namespace ExcelMerge
         {
             EnsureRow(row);
             var cells = grid[row];
-            if (column > cells.Length)
+            if (column >= cells.Length)
                 Array.Resize(ref cells, column + 1);
 
             cells[column] = value;

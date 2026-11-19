@@ -38,6 +38,15 @@ namespace ExcelMerge
             return row;
         }
 
+        /// <summary>创建对齐行并记录两侧真实物理行（任一侧可为 null）。</summary>
+        public ExcelRowDiff CreateRow(ExcelRow srcRow, ExcelRow dstRow)
+        {
+            var row = CreateRow();
+            row.SetRows(srcRow, dstRow);
+
+            return row;
+        }
+
         public ExcelSheetDiffSummary CreateSummary()
         {
             var addedRowCount = 0;

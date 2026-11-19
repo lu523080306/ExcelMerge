@@ -7,11 +7,21 @@ namespace ExcelMerge
     public class ExcelRow : IEquatable<ExcelRow>
     {
         public int Index { get; private set; }
+
+        /// <summary>该行在原始文件中的物理行号（读取时跳过 null 行后仍保留真实位置）。</summary>
+        public int OriginalRowIndex { get; private set; }
+
         public List<ExcelCell> Cells { get; private set; }
 
         public ExcelRow(int index, IEnumerable<ExcelCell> cells)
+            : this(index, index, cells)
+        {
+        }
+
+        public ExcelRow(int index, int originalRowIndex, IEnumerable<ExcelCell> cells)
         {
             Index = index;
+            OriginalRowIndex = originalRowIndex;
             Cells = cells.ToList();
         }
 

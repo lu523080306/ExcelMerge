@@ -63,7 +63,7 @@ namespace ExcelMerge
             var index = 0;
             foreach (var row in Rows.SkipWhile(r => r.Value.IsBlank()))
             {
-                rows.Add(index, new ExcelRow(index, row.Value.Cells));
+                rows.Add(index, new ExcelRow(index, row.Value.OriginalRowIndex, row.Value.Cells));
                 index++;
             }
 
@@ -85,7 +85,7 @@ namespace ExcelMerge
             var index = 0;
             foreach (var row in Rows.Reverse().SkipWhile(r => r.Value.IsBlank()).Reverse())
             {
-                rows.Add(index, new ExcelRow(index, row.Value.Cells));
+                rows.Add(index, new ExcelRow(index, row.Value.OriginalRowIndex, row.Value.Cells));
                 index++;
             }
 
@@ -139,7 +139,7 @@ namespace ExcelMerge
                 while (queue.Any())
                 {
                     if (columnStatusMap[index] == ExcelColumnStatus.Inserted)
-                        shifted.Add(new ExcelCell(string.Empty, 0, 0));
+                        shifted.Add(new ExcelCell(string.Empty, 0, 0, true));
                     else
                         shifted.Add(queue.Dequeue());
 
@@ -157,7 +157,7 @@ namespace ExcelMerge
                 while (queue.Any())
                 {
                     if (columnStatusMap[index] == ExcelColumnStatus.Deleted)
-                        shifted.Add(new ExcelCell(string.Empty, 0, 0));
+                        shifted.Add(new ExcelCell(string.Empty, 0, 0, true));
                     else
                         shifted.Add(queue.Dequeue());
 
@@ -284,7 +284,7 @@ namespace ExcelMerge
         private static void DiffCellsCaseEqual(
             DiffResult<ExcelRow> result, ExcelSheetDiff sheetDiff, Dictionary<int, ExcelColumnStatus> columnStatusMap)
         {
-            var row = sheetDiff.CreateRow();
+            var row = sheetDiff.CreateRow(result.Obj1, result.Obj2);
 
             var equalizedCells = EqualizeColumnCount(result.Obj1.Cells, result.Obj2.Cells, columnStatusMap);
             var columnIndex = 0;
@@ -305,18 +305,18 @@ namespace ExcelMerge
                 }
                 else if (srcCell != null && dstCell == null)
                 {
-                    dstCell = new ExcelCell(string.Empty, srcCell.OriginalColumnIndex, srcCell.OriginalColumnIndex);
+                    dstCell = new ExcelCell(string.Empty, srcCell.OriginalColumnIndex, result.Obj2.OriginalRowIndex, true);
                     row.CreateCell(srcCell, dstCell, columnIndex, ExcelCellStatus.Removed);
                 }
                 else if (srcCell == null && dstCell != null)
                 {
-                    srcCell = new ExcelCell(string.Empty, dstCell.OriginalColumnIndex, dstCell.OriginalColumnIndex);
+                    srcCell = new ExcelCell(string.Empty, dstCell.OriginalColumnIndex, result.Obj1.OriginalRowIndex, true);
                     row.CreateCell(srcCell, dstCell, columnIndex, ExcelCellStatus.Added);
                 }
                 else
                 {
-                    srcCell = new ExcelCell(string.Empty, 0, 0);
-                    dstCell = new ExcelCell(string.Empty, 0, 0);
+                    srcCell = new ExcelCell(string.Empty, 0, 0, true);
+                    dstCell = new ExcelCell(string.Empty, 0, 0, true);
                     row.CreateCell(srcCell, dstCell, columnIndex, ExcelCellStatus.None);
                 }
 
@@ -327,12 +327,12 @@ namespace ExcelMerge
         private static void DiffCellsCaseDeleted(
             DiffResult<ExcelRow> result, ExcelSheetDiff sheetDiff, Dictionary<int, ExcelColumnStatus> columnStatusMap)
         {
-            var row = sheetDiff.CreateRow();
+            var row = sheetDiff.CreateRow(result.Obj1, null);
 
             var columnIndex = 0;
             foreach (var cell1 in result.Obj1.Cells)
             {
-                var cell2 = new ExcelCell(string.Empty, cell1.OriginalColumnIndex, cell1.OriginalRowIndex);
+                var cell2 = new ExcelCell(string.Empty, cell1.OriginalColumnIndex, result.Obj1.OriginalRowIndex, true);
                 row.CreateCell(cell1, cell2, columnIndex, ExcelCellStatus.Removed);
 
                 columnIndex++;
@@ -342,12 +342,12 @@ namespace ExcelMerge
         private static void DiffCellsCaseInserted(
             DiffResult<ExcelRow> result, ExcelSheetDiff sheetDiff, Dictionary<int, ExcelColumnStatus> columnStatusMap)
         {
-            var row = sheetDiff.CreateRow();
+            var row = sheetDiff.CreateRow(null, result.Obj2);
 
             var columnIndex = 0;
             foreach (var cell2 in result.Obj2.Cells)
             {
-                var cell1 = new ExcelCell(string.Empty, cell2.OriginalColumnIndex, cell2.OriginalRowIndex);
+                var cell1 = new ExcelCell(string.Empty, cell2.OriginalColumnIndex, result.Obj2.OriginalRowIndex, true);
                 row.CreateCell(cell1, cell2, columnIndex, ExcelCellStatus.Added);
 
                 columnIndex++;
