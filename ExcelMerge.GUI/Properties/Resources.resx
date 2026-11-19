@@ -467,6 +467,9 @@
 Will use first sheet.
 If you don't want to apply file settings, enable "Ignore File Setting".</value>
   </data>
+  <data name="Msg_ReadFileFailed" xml:space="preserve">
+    <value>Failed to read one or both files. The file may be locked or opened by another application (e.g. Excel/WPS), or the file is corrupted.</value>
+  </data>
   <data name="Word_SheetIndex" xml:space="preserve">
     <value>Sheet Index</value>
   </data>

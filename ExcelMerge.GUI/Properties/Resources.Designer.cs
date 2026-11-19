@@ -718,6 +718,15 @@ namespace ExcelMerge.GUI.Properties {
                 return ResourceManager.GetString("Msg_OutofSheetRange", resourceCulture);
             }
         }
+
+        /// <summary>
+        ///   Failed to read one or both files. ... に類似しているローカライズされた文字列を検索します。
+        /// </summary>
+        public static string Msg_ReadFileFailed {
+            get {
+                return ResourceManager.GetString("Msg_ReadFileFailed", resourceCulture);
+            }
+        }
         
         /// <summary>
         ///   Reading Files ... に類似しているローカライズされた文字列を検索します。

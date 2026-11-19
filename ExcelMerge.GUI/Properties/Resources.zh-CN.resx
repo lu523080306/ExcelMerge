@@ -467,6 +467,9 @@
 将使用第一张表。
 如果您不想应用文件设置，请弃用“忽略文件设置”。</value>
   </data>
+  <data name="Msg_ReadFileFailed" xml:space="preserve">
+    <value>读取一个或两个文件失败。文件可能被锁定或被其他程序（如 Excel/WPS）打开，或文件已损坏。</value>
+  </data>
   <data name="Word_SheetIndex" xml:space="preserve">
     <value>表格索引</value>
   </data>

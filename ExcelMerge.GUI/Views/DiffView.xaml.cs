@@ -806,6 +806,9 @@ namespace ExcelMerge.GUI.Views
                 dwb = ExcelWorkbook.Create(dstPath, config);
             });
 
+            if (swb == null || dwb == null)
+                throw new System.IO.IOException(Properties.Resources.Msg_ReadFileFailed);
+
             return Tuple.Create(swb, dwb);
         }
 
@@ -864,6 +867,7 @@ namespace ExcelMerge.GUI.Views
 
                 // 批量提取：对全部分组的 sheet 对逐个 diff，供右上角 sheet 状态下拉着色
                 GetViewModel().SheetDiffInfoList.Clear();
+                var warnedLargeSheet = false;
                 foreach (var names in GetViewModel().GetSheetNamePairs())
                 {
                     ExcelSheet srcSheet;
@@ -872,8 +876,12 @@ namespace ExcelMerge.GUI.Views
                         !dstWorkbook.Sheets.TryGetValue(names.Item2, out dstSheet))
                         continue;
 
-                    if (srcSheet.Rows.Count > 10000 || dstSheet.Rows.Count > 10000)
+                    if (!warnedLargeSheet &&
+                        (srcSheet.Rows.Count > 10000 || dstSheet.Rows.Count > 10000))
+                    {
                         MessageBox.Show(Properties.Resources.Msg_WarnSize);
+                        warnedLargeSheet = true;
+                    }
 
                     GetViewModel().AddSheetDiff(ExcelSheet.Diff(srcSheet, dstSheet, diffConfig));
                 }
