@@ -336,6 +336,10 @@ namespace ExcelMerge
                 if (!row.Cells.TryGetValue(c, out cell))
                     continue;
 
+                // 只写有差异的格：None(等值)格改写会制造幽灵物理格
+                if (cell.Status == ExcelCellStatus.None)
+                    continue;
+
                 target.SetCellValue(targetRow, finalCol[c], fromSrc ? cell.SrcCell.Value : cell.DstCell.Value);
                 result.AppliedCellCount++;
             }
@@ -492,6 +496,11 @@ namespace ExcelMerge
 
                 ExcelCellDiff cell;
                 if (!row.Cells.TryGetValue(c, out cell))
+                    continue;
+
+                // 只写"真正需要同步"的格：None(等值)格 src==dst，重写只会把目标文件
+                // 空格写成物理格子/撑宽行，重读时列对齐会把它判成幽灵差异。
+                if (cell.Status == ExcelCellStatus.None)
                     continue;
 
                 target.SetCellValue(targetRow, finalCol[c], fromSrc ? cell.SrcCell.Value : cell.DstCell.Value);

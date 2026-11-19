@@ -87,8 +87,28 @@ namespace ExcelMerge
 
         public override void SetCellValue(int row, int column, string value)
         {
-            var npoiRow = sheet.GetRow(row) ?? sheet.CreateRow(row);
-            var cell = npoiRow.GetCell(column) ?? npoiRow.CreateCell(column);
+            var npoiRow = sheet.GetRow(row);
+            if (npoiRow == null)
+            {
+                // 目标根本没有这一行；若写的是空格则无需为它造行
+                if (string.IsNullOrEmpty(value))
+                    return;
+                npoiRow = sheet.CreateRow(row);
+            }
+
+            var cell = npoiRow.GetCell(column);
+            if (string.IsNullOrEmpty(value))
+            {
+                // 写空格 → 与 src 对齐应"无此格"。目标存在的格直接移除，
+                // 否则留下空 cell 会撑宽行，重读时列对齐把多余空列判成差异。
+                if (cell != null)
+                    npoiRow.RemoveCell(cell);
+                return;
+            }
+
+            if (cell == null)
+                cell = npoiRow.CreateCell(column);
+
             ExcelUtility.SetValue(cell, value);
         }
 
@@ -100,8 +120,12 @@ namespace ExcelMerge
             var npoiRow = sheet.CreateRow(rowIndex);
             for (int i = 0; i < values.Count; i++)
             {
-                var cell = npoiRow.CreateCell(i);
                 var value = values[i];
+                // 不落盘空格：避免插入行被撑满成"全是空 cell"，重读时列对齐产生幽灵差异
+                if (string.IsNullOrEmpty(value))
+                    continue;
+
+                var cell = npoiRow.CreateCell(i);
                 double d;
                 if (ColumnHasNumeric(i) && double.TryParse(value, out d))
                     cell.SetCellValue(d);

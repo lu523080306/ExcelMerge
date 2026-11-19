@@ -64,8 +64,48 @@ namespace ExcelMerge.GUI.Models
 
             columnCount = SheetDiff.Rows.Max(r => r.Value.Cells.Count);
             rowCount = SheetDiff.Rows.Count();
-            
+
+            // 数据层不再截断超大表(apply 需要完整 diff.Rows)。
+            // 显示层开窗：只显示"前 100 + 差异行附近"，其余行交给 FastWpfGrid 隐藏，
+            // 保证大表的渲染/周视图/着色/行高同步仍按千级行数工作。
+            if (rowCount > 10000)
+                BuildDisplayWindow();
+
             App.Instance.OnSettingUpdated += () => { InvalidateAll(); };
+        }
+
+        /// <summary>大表显示窗口：保留前 100 行 + 每个差异行前后各 100 行，其余隐藏。</summary>
+        private void BuildDisplayWindow()
+        {
+            var total = rowCount;
+            var keep = new HashSet<int>();
+            for (var i = 0; i < total && i < 100; i++)
+                keep.Add(i);
+
+            foreach (var pair in SheetDiff.Rows)
+            {
+                var row = pair.Value;
+                var isDiff = row.Cells.Any(c => c.Value.Status != ExcelCellStatus.None);
+                if (!isDiff)
+                    continue;
+
+                var center = pair.Key;
+                for (var i = Math.Max(0, center - 100); i <= Math.Min(total - 1, center + 100); i++)
+                    keep.Add(i);
+            }
+
+            var hidden = new HashSet<int>();
+            var visualIndex = 0;
+            rowIndexMap.Clear();
+            foreach (var pair in SheetDiff.Rows)
+            {
+                if (keep.Contains(pair.Key))
+                    rowIndexMap[visualIndex++] = pair.Key;
+                else
+                    hidden.Add(pair.Key);
+            }
+
+            SetRowArrange(hidden, new HashSet<int>());
         }
 
         public override string GetColumnHeaderText(int column)
@@ -571,6 +611,11 @@ namespace ExcelMerge.GUI.Models
             SetRowArrange(new HashSet<int>(), new HashSet<int>());
 
             rowIndexMap.Clear();
+
+            // 恢复"显示相等行"时，大表仍需回到显示窗口（前 100 + 差异附近），
+            // 否则全量 4 万+ 行会拖垮周视图/着色/行高同步。
+            if (rowCount > 10000)
+                BuildDisplayWindow();
         }
     }
 }

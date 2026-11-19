@@ -170,20 +170,6 @@ namespace ExcelMerge
             var r = DiffUtil.Diff(src.Rows.Values, dst.Rows.Values, option);
             r = DiffUtil.Order(r, DiffOrderType.LazyDeleteFirst);
             var resultArray = DiffUtil.OptimizeCaseDeletedFirst(r).ToArray();
-            if (resultArray.Length > 10000)
-            {
-                var count = 0;
-                var indices = Enumerable.Range(0, 100).ToList();
-                foreach (var result in resultArray)
-                {
-                    if (result.Status != DiffStatus.Equal)
-                        indices.AddRange(Enumerable.Range(Math.Max(0, count - 100), 200));
-
-                    count++;
-                }
-                indices = indices.Distinct().ToList();
-                resultArray = indices.Where(i => i < resultArray.Length).Select(i => resultArray[i]).ToArray();
-            }
 
             var sheetDiff = new ExcelSheetDiff();
             sheetDiff.SrcSheet = src;

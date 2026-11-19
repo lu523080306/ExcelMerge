@@ -398,15 +398,16 @@ namespace ExcelMerge.GUI.Views
             foreach (var grid in grids)
                 grid.ClearRowSizeOverrides();
 
-            var maxRowCount = grids.Max(g => g.ModelRowCount);
+            var maxRowCount = grids.Max(g => g.RealRowCount);
 
             for (int i = 0; i < maxRowCount; i++)
             {
-                var maxHeight = grids.Max(g => g.CalculateModelRowHeight(i));
+                var modelRow = grids.First().RealToModelRow(i);
+                var maxHeight = grids.Max(g => g.CalculateModelRowHeight(modelRow));
                 foreach (var grid in grids)
                 {
-                    if (grid.GetModelRowHeight(i) != maxHeight)
-                        grid.PutSizeOverride(i, maxHeight);
+                    if (grid.GetModelRowHeight(modelRow) != maxHeight)
+                        grid.PutSizeOverride(modelRow, maxHeight);
                 }
             }
 

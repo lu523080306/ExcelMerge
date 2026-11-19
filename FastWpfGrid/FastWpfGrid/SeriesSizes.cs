@@ -389,6 +389,27 @@ namespace FastWpfGrid
             if (_hiddenAndFrozenModelIndexes == null) return realIndex;
 
             realIndex -= FrozenCount;
+
+            // 无冻结行时走二分：隐藏行已升序，realIndex 需要跳过"位置在它之前"的隐藏行数。
+            // 对升序 h[]，等价求最小的 m 使 m - #{h <= m} >= realIndex；
+            // 由于 h[i]-i 非递减，可二分求满足 h[i]-i <= realIndex 的最大 i。
+            if (_frozenModelIndexes == null)
+            {
+                var list = _hiddenAndFrozenModelIndexes;
+                int lo = 0;
+                int hi = list.Count;
+                while (lo < hi)
+                {
+                    int mid = (lo + hi) / 2;
+                    if (list[mid] - mid <= realIndex)
+                        lo = mid + 1;
+                    else
+                        hi = mid;
+                }
+
+                return realIndex + lo;
+            }
+
             foreach (int hidItem in _hiddenAndFrozenModelIndexes)
             {
                 if (realIndex < hidItem) return realIndex;
