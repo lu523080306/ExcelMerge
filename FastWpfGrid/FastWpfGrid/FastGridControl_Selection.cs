@@ -100,6 +100,26 @@ namespace FastWpfGrid
             return true;
         }
 
+        /// <summary>
+        /// 用给定的 real 坐标整体替换当前选择。
+        /// 不触发 SelectedCellsChanged：供两侧网格镜像选择时调用，
+        /// 避免“设置当前格 → 触发同步 → 再清空选择”形成递归并互相覆盖。
+        /// </summary>
+        public void SetSelectedCells(IEnumerable<FastGridCellAddress> cells)
+        {
+            _selectedCells.ToList().ForEach(InvalidateCell);
+            ClearSelectedCells();
+
+            foreach (var cell in cells)
+            {
+                if (!cell.IsCell)
+                    continue;
+
+                AddSelectedCell(cell);
+                InvalidateCell(cell);
+            }
+        }
+
         private void RemoveSelectedCell(FastGridCellAddress cell)
         {
             if (!cell.IsCell) return;

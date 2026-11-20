@@ -18,6 +18,10 @@ namespace ExcelMerge.GUI.Views
 {
     class DiffViewEventHandler : IDataGridEventListener, ILocationGridEventListener, IViewportEventListener, IValueTextBoxEventListener
     {
+        /// <summary>正在两侧镜像选择：挡住“同步当前格”同步派发回来的嵌套选择事件。</summary>
+        [ThreadStatic]
+        private static bool isSyncingSelection;
+
         public string Key { get; }
 
         public DiffViewEventHandler(string key)
@@ -160,24 +164,34 @@ namespace ExcelMerge.GUI.Views
             if (e.Sender == dataGrid)
                 return;
 
+            // 同步当前格会同步触发本方法（MoveCurrentCell 内部派发选择变更事件）。
+            // 用重入标记挡住嵌套调用，否则“设置当前格”引发的内层同步会先把选择集合
+            // 覆盖成单个格子，外层再镜像回去时整行/多选就丢了。
+            if (isSyncingSelection)
+                return;
+
+            if (dataGrid.Model == null)
+                return;
+
             var targetCell = new FastGridCellAddress(e.Sender.CurrentCell.Row, e.Sender.CurrentCell.Column);
-            if (!targetCell.Equals(dataGrid.CurrentCell))
+            if (dataGrid.Model.RowCount < targetCell.Row || dataGrid.Model.ColumnCount < targetCell.Column)
+                return;
+
+            isSyncingSelection = true;
+            try
             {
-                if (dataGrid.Model == null)
-                    return;
+                if (!targetCell.Equals(dataGrid.CurrentCell))
+                    dataGrid.CurrentCell = targetCell;
 
-                if (dataGrid.Model.RowCount < targetCell.Row || dataGrid.Model.ColumnCount < targetCell.Column)
-                    return;
-
-                dataGrid.CurrentCell = targetCell;
-
-                if (e.Sender.GetSelectedModelCells().Aggregate(false, (r, c) => r |= dataGrid.AddSelectedCell(c)))
-                {
-                    dataGrid.InvalidateAll();
-                }
+                // 当前格没变不代表选择没变：点选当前格所在的整行、Shift 框选、Ctrl 加选
+                // 都不会改变 CurrentCell。因此选择集合必须每次按 real 坐标整体镜像
+                // （SelectedCells 存的是隐藏行后的可见行号，两侧共享同一隐藏布局）。
+                dataGrid.SetSelectedCells(e.Sender.SelectedCells);
             }
-
-            var valuteTextBox = e.Container.ResolveAll<RichTextBox>();
+            finally
+            {
+                isSyncingSelection = false;
+            }
         }
 
         public void OnColumnHeaderChanged(DiffViewEventArgs<FastGridControl> e)
