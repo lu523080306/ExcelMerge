@@ -123,8 +123,7 @@ namespace ExcelMerge
         /// <summary>
         /// 只应用选中的 diff 行（"同步一行"模式）：结构行(Added/Removed)做插入/删除，普通行做整行值回写。
         /// 未选中的行完全不动；值按目标物理行号写入，行结构按物理位置降序执行。
-        /// 目标缺少的列（对侧独有列）若在选中行里有值，会先补插该列，
-        /// 否则插入行时这一列的值会被丢掉。
+        /// 只同步行：列只在选中行需要时补插（其余行留空），不删除/重排其他列。
         /// </summary>
         public ExcelApplyResult ApplyRows(
             ExcelSheetDiff diff, string targetFilePath, string targetSheetName,
@@ -139,7 +138,8 @@ namespace ExcelMerge
                     var srcToDst = direction == ExcelDiffDirection.SrcToDst;
                     var selected = new HashSet<int>(diffRowIndexes ?? new int[0]);
 
-                    // 选中行里出现的“目标缺失列”必须先补插，否则整行同步会丢掉这些格
+                    // 选中行里出现的“目标缺失列”必须先补插，否则整行同步会丢掉这些格；
+                    // 补插的列只在选中行写值，其余行保持空白。
                     var insertColumns = GetInsertColumnsForSelectedRows(diff, srcToDst, selected);
                     var plan = BuildColumnPlan(diff, srcToDst, null, insertColumns.Count > 0, insertColumns);
 
@@ -167,8 +167,8 @@ namespace ExcelMerge
         /// 只同步选中的对齐列（"同步一列"模式）：
         ///   结构列(对侧独有/目标独有) → 只对选中列做插入/删除；
         ///   值列 → 对每一行按目标物理行号把选中列的值从对侧写回。
-        /// 不删除/重排目标独有行；但本批插入结构列时，对侧独有行会补插一行（只写选中列），
-        /// 否则这些行的新增列永远为空。
+        /// 只同步列：对侧独有行在目标里补插一行（只写选中列，其余列留空），
+        /// 目标独有行的选中列写空——目标是“源列有几个单元格就落几个”。
         /// 列位置按"本批实际执行的列增删"重新计算。
         /// </summary>
         public ExcelApplyResult ApplyColumns(
@@ -187,12 +187,10 @@ namespace ExcelMerge
                     var plan = BuildColumnPlan(diff, srcToDst, selected, true, selected);
                     ExecuteColumnOps(target, plan, result);
 
-                    // 值：所有两侧都存在的行，只写选中列（WriteCol 已按选中集合过滤）
-                    WriteValues(target, diff, srcToDst, plan, null, result);
+                    // 值：目标所有行的选中列都写（源侧缺行写空），WriteCol 已按选中集合过滤
+                    WriteValues(target, diff, srcToDst, plan, null, result, includeTargetOnlyRows: true);
 
-                    // 源侧独有行在目标里没有落点：补插整行（共享列 + 本批插入的结构列），
-                    // 否则这些行的选中列/新增列永远为空。注意不能只在“插入结构列”时执行，
-                    // 否则行同步建过列之后再同步列，缺失行又会被跳过。
+                    // 对侧独有行在目标里没有落点：补插一行，只写选中列，其他列留空
                     AlignRowsForColumnSync(target, diff, srcToDst, plan, result);
 
                     target.Save();
@@ -211,10 +209,15 @@ namespace ExcelMerge
             }
         }
 
-        /// <summary>写值：只写两侧都存在的行；selected 非 null 时只写选中的 diff 行。</summary>
+        /// <summary>
+        /// 写值：默认只写两侧都存在的行；includeTargetOnlyRows=true 时（列同步）
+        /// 目标独有行也写——源侧没有这一行，值即空串，用来把目标该列清空。
+        /// 只存在于源侧的行没有目标落点，任何模式都不写（列同步不插行）。
+        /// </summary>
         private static void WriteValues(
             ExcelWriteTarget target, ExcelSheetDiff diff, bool srcToDst,
-            ColumnPlan plan, HashSet<int> selectedRows, ExcelApplyResult result)
+            ColumnPlan plan, HashSet<int> selectedRows, ExcelApplyResult result,
+            bool includeTargetOnlyRows = false)
         {
             foreach (var pair in diff.Rows)
             {
@@ -223,11 +226,18 @@ namespace ExcelMerge
 
                 var row = pair.Value;
 
-                // 行值只存在于目标侧的行没有源值可写；只存在于源侧的行目标没有落点
-                if (!row.ExistsInSrc || !row.ExistsInDst)
+                var existsInTarget = srcToDst ? row.ExistsInDst : row.ExistsInSrc;
+                var existsInOther = srcToDst ? row.ExistsInSrc : row.ExistsInDst;
+
+                // 目标没有这一行 → 没有落点（列同步不插行）
+                if (!existsInTarget)
                     continue;
 
-                var targetRow = srcToDst ? row.DstRowIndex.Value : row.SrcRowIndex.Value;
+                // 目标独有行：行同步/全量由行结构操作处理；列同步按“源侧无此行”写空
+                if (!existsInOther && !includeTargetOnlyRows)
+                    continue;
+
+                var targetRow = (srcToDst ? row.DstRowIndex : row.SrcRowIndex).Value;
 
                 foreach (var cellPair in row.Cells)
                 {
@@ -249,10 +259,9 @@ namespace ExcelMerge
         }
 
         /// <summary>
-        /// 列同步时的行对齐（仅在插入结构列时执行）：
-        ///   对侧独有行在目标里没有落点，但新增的结构列必须覆盖这些行，
-        ///   因此在会话空档（上一个目标行之后、下一个目标行之前）插入一行，只写选中列的值。
-        ///   目标独有行保持不动。
+        /// 列同步时的行对齐：对侧独有行（源侧有、目标没有）补插一行，只写选中列的值，
+        /// 其他列留空——保证“源列有几个单元格就落几个”。目标独有行保持不动
+        /// （其选中列由 WriteValues 写空）。
         /// </summary>
         private static void AlignRowsForColumnSync(
             ExcelWriteTarget target, ExcelSheetDiff diff, bool srcToDst, ColumnPlan plan, ExcelApplyResult result)
@@ -300,6 +309,7 @@ namespace ExcelMerge
             {
                 target.InsertRow(op.Key, op.Values);
                 result.InsertedRowCount++;
+                result.AppliedCellCount += CountValues(op.Values);
             }
         }
 
@@ -310,9 +320,8 @@ namespace ExcelMerge
         {
             foreach (var want in wants)
             {
-                // 整行带值：目标缺失的行没有可覆盖的数据，整行插入不会破坏任何东西，
-                // 还能避免“只填选中列、其他列留空”的行内空格。
-                var values = BuildInsertValues(want, srcToDst, plan);
+                // 只写选中列：其他列留空，列同步不应把整行都带过去
+                var values = BuildInsertValues(want, srcToDst, plan, selectedColumnsOnly: true);
                 if (!values.Any(v => !string.IsNullOrEmpty(v)))
                     continue;
 
@@ -326,6 +335,18 @@ namespace ExcelMerge
             }
 
             wants.Clear();
+        }
+
+        private static int CountValues(IReadOnlyList<string> values)
+        {
+            var count = 0;
+            for (var i = 0; i < values.Count; i++)
+            {
+                if (!string.IsNullOrEmpty(values[i]))
+                    count++;
+            }
+
+            return count;
         }
 
         private static void ExecuteColumnOps(ExcelWriteTarget target, ColumnPlan plan, ExcelApplyResult result)
@@ -372,6 +393,7 @@ namespace ExcelMerge
                 {
                     target.InsertRow(op.Key, op.Values);
                     result.InsertedRowCount++;
+                    result.AppliedCellCount += CountValues(op.Values);
                 }
             }
         }
@@ -461,7 +483,13 @@ namespace ExcelMerge
         }
 
         /// <summary>插入行的值数组：下标为目标物理列（操作后布局）。</summary>
-        private static string[] BuildInsertValues(ExcelRowDiff row, bool srcToDst, ColumnPlan plan)
+        /// <summary>
+        /// 插入行的值数组：下标为目标物理列（操作后布局）。
+        /// selectedColumnsOnly=true 时只填 plan.WriteCol 命中的列（列同步），
+        /// 其余列留空，避免“同步一列却把整行都带过去”。
+        /// </summary>
+        private static string[] BuildInsertValues(
+            ExcelRowDiff row, bool srcToDst, ColumnPlan plan, bool selectedColumnsOnly = false)
         {
             var values = new string[plan.Count < 0 ? 0 : plan.Count];
             for (var i = 0; i < values.Length; i++)
@@ -469,7 +497,7 @@ namespace ExcelMerge
 
             foreach (var pair in row.Cells)
             {
-                var col = plan.PostOpCol[pair.Key];
+                var col = selectedColumnsOnly ? plan.WriteCol[pair.Key] : plan.PostOpCol[pair.Key];
                 if (col < 0 || col >= values.Length)
                     continue;
 
@@ -497,7 +525,7 @@ namespace ExcelMerge
 
         /// <summary>
         /// 选中行里，目标不存在的列（对侧独有）且该行有值的列。
-        /// 行同步时先补插这些列，插入行的这些格才有落点。
+        /// 行同步时先补插这些列，选中行的这些格才有落点（其余行留空）。
         /// </summary>
         private static HashSet<int> GetInsertColumnsForSelectedRows(
             ExcelSheetDiff diff, bool srcToDst, HashSet<int> selected)
@@ -640,8 +668,10 @@ namespace ExcelMerge
                     }
                     else
                     {
-                        // 保留但不同步值（不覆盖目标独有列）
+                        // 目标独有列：行同步时源侧没有这一列 → 写空；
+                        // 列同步且未选中该列时保留目标原值（WriteCol=-1）
                         plan.PostOpCol[c] = pos;
+                        plan.WriteCol[c] = selectedColumn ? pos : -1;
                         pos++;
                     }
                 }
