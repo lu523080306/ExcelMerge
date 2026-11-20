@@ -174,8 +174,14 @@ namespace ExcelMerge.GUI.Views
                 return;
 
             var targetCell = new FastGridCellAddress(e.Sender.CurrentCell.Row, e.Sender.CurrentCell.Column);
-            if (dataGrid.Model.RowCount < targetCell.Row || dataGrid.Model.ColumnCount < targetCell.Column)
-                return;
+
+            // 当前格越界（点到了数据区外）不能直接 return：那会“点哪边清哪边”，
+            // 另一侧保留旧选择。统一降级为 Empty，让两侧一起清空。
+            if ((targetCell.Row.HasValue && (targetCell.Row.Value < 0 || targetCell.Row.Value >= dataGrid.RealRowCount)) ||
+                (targetCell.Column.HasValue && (targetCell.Column.Value < 0 || targetCell.Column.Value >= dataGrid.RealColumnCount)))
+            {
+                targetCell = FastGridCellAddress.Empty;
+            }
 
             isSyncingSelection = true;
             try

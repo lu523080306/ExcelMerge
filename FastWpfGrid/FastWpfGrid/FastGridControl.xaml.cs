@@ -599,7 +599,7 @@ namespace FastWpfGrid
             if (a.IsColumnHeader)
             {
                 minrow = 0;
-                maxrow = _rowSizes.RealCount;
+                maxrow = _rowSizes.RealCount - 1;
             }
             else
             {
@@ -617,6 +617,16 @@ namespace FastWpfGrid
             {
                 maxcol = mincol + SelectedRealColumnCountLimit.Value + LIMIT_RESERVE;
             }
+
+            // 拖拽/点击可能落到数据区外（real 越界）：统一夹到合法范围，
+            // 否则会产生越界“幽灵格”，拖到远处还会循环出巨量格子。
+            if (_rowSizes.RealCount <= 0 || _columnSizes.RealCount <= 0)
+                return res;
+
+            minrow = Math.Max(minrow, 0);
+            maxrow = Math.Min(maxrow, _rowSizes.RealCount - 1);
+            mincol = Math.Max(mincol, 0);
+            maxcol = Math.Min(maxcol, _columnSizes.RealCount - 1);
 
             for (int row = minrow; row <= maxrow; row++)
             {

@@ -78,6 +78,11 @@ namespace FastWpfGrid
             pt.Y *= DpiDetector.DpiYKoef;
             var cell = GetCellAddress(pt);
 
+            // 点在数据区外（网格空白处）：不产生越界“幽灵格”。越界格无法渲染，
+            // 却会进入选择集合，让另一侧镜像同步看起来“点哪边清哪边”。
+            if (cell.IsCell && !IsRealCellInRange(cell))
+                return;
+
             var currentRegion = CurrentCellActiveRegions.FirstOrDefault(x => x.Rect.Contains(pt));
             if (currentRegion != null)
             {
@@ -347,6 +352,11 @@ namespace FastWpfGrid
             pt.X *= DpiDetector.DpiXKoef;
             pt.Y *= DpiDetector.DpiYKoef;
             var cell = GetCellAddress(pt);
+
+            // 右键数据区外/表头：不改变选择。原实现会把越界 real 行直接写进
+            // _currentCell，镜像同步的范围保护随即 return，造成单边清空、两侧脱钩。
+            if (!IsRealCellInRange(cell))
+                return;
 
             if (!_selectedCells.Contains(cell))
             {

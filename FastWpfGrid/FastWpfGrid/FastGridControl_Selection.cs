@@ -112,7 +112,9 @@ namespace FastWpfGrid
 
             foreach (var cell in cells)
             {
-                if (!cell.IsCell)
+                // 越界 real 坐标（点击/拖拽到数据区外产生）不能进入选择集合：
+                // 它们渲染不出来，却会让两侧镜像选择看起来不一致。
+                if (!IsRealCellInRange(cell))
                     continue;
 
                 AddSelectedCell(cell);

@@ -32,6 +32,21 @@ namespace FastWpfGrid
             get { return _realRowCount; }
         }
 
+        public int RealColumnCount
+        {
+            get { return _realColumnCount; }
+        }
+
+        /// <summary>地址是否是当前网格（可见 real 坐标）范围内的数据格。</summary>
+        private bool IsRealCellInRange(FastGridCellAddress cell)
+        {
+            if (!cell.IsCell)
+                return false;
+
+            return cell.Row.Value >= 0 && cell.Row.Value < _rowSizes.RealCount
+                && cell.Column.Value >= 0 && cell.Column.Value < _columnSizes.RealCount;
+        }
+
         public int VisibleRowCount
         {
             get { return _rowSizes.GetVisibleScrollCount(FirstVisibleRowScrollIndex, GridScrollAreaHeight); }
